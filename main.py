@@ -81,6 +81,12 @@ def start_web_server(port: int):
 # Load Config
 # ─────────────────────────────────────────────────────────────
 def load_config(path: str = "config/config.yaml") -> dict:
+    if not os.path.exists(path):
+        example_path = path + ".example"
+        if os.path.exists(example_path):
+            with open(example_path, "r") as f:
+                return yaml.safe_load(f)
+        return {}
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
@@ -190,10 +196,10 @@ def main():
 
     # ── Create Client ──────────────────────────────────────
     client = AngelClient(
-        api_key=angel_cfg.get("api_key", "DEMO"),
-        client_id=angel_cfg.get("client_id", "DEMO001"),
-        password=angel_cfg.get("password", "demo123"),
-        totp_secret=angel_cfg.get("totp_secret", "JBSWY3DPEHPK3PXP"),
+        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", "DEMO"),
+        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", "DEMO001"),
+        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", "demo123"),
+        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", "JBSWY3DPEHPK3PXP"),
         demo_mode=demo_mode,
     )
 
