@@ -1,0 +1,40 @@
+# ============================================================
+#  Angel One SmartAPI Configuration (Template)
+#  Rename this file to config.yaml and fill in your details
+# ============================================================
+
+angel:
+  api_key: "YOUR_API_KEY_HERE"           # From Angel One developer portal
+  client_id: "YOUR_CLIENT_ID_HERE"       # Your Angel One login ID
+  password: "YOUR_PASSWORD_HERE"         # Angel One login password
+  totp_secret: "YOUR_TOTP_SECRET_HERE"   # TOTP secret (from API settings)
+
+scanner:
+  min_score: 50
+  top_n: 20
+  refresh_interval: 60
+  demo_mode: false
+  candle_interval: "ONE_DAY"
+  history_days: 100
+
+alerts:
+  telegram_enabled: false
+  telegram_bot_token: "YOUR_BOT_TOKEN"
+  telegram_chat_id: "YOUR_CHAT_ID"
+  alert_threshold: 70
+
+output:
+  save_html: true
+  html_path: "output/dashboard.html"
+  save_csv: true
+  csv_path: "output/results.csv"
+  log_level: "INFO"
+
+formula_weights:
+  rsi_momentum: 20
+  macd_crossover: 20
+  ema_trend: 15
+  volume_surge: 15
+  oi_buildup: 15
+  supertrend: 10
+  near_52w_high: 5

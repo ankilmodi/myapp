@@ -1,0 +1,16 @@
+# Credentials
+config/config.yaml
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# Application outputs and logs
+logs/
+output/results.csv
+output/dashboard.html
