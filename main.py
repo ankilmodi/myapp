@@ -43,8 +43,38 @@ from core.data_fetcher import DataFetcher
 from scanner.screener import FOScreener
 from output.report import print_rich_table, print_summary, save_csv, save_html_report
 
+import threading
+import http.server
+import socketserver
+
 os.makedirs("output", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
+
+
+class DashboardHandler(http.server.SimpleHTTPRequestHandler):
+    def translate_path(self, path):
+        root = os.path.join(os.getcwd(), 'output')
+        path = path.lstrip('/')
+        if not path or path == 'index.html' or path == 'dashboard.html':
+            return os.path.join(root, 'dashboard.html')
+        return os.path.join(root, path)
+
+
+def start_web_server(port: int):
+    os.makedirs("output", exist_ok=True)
+    if not os.path.exists("output/dashboard.html"):
+        with open("output/dashboard.html", "w", encoding="utf-8") as f:
+            f.write("<h1>Loading Scanner Dashboard... Please refresh in a few seconds.</h1>")
+
+    handler = DashboardHandler
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            logger.info(f"🌍 Web server started on port {port}. Serving dashboard.")
+            httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"Web server error: {e}")
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -178,6 +208,17 @@ def main():
 
     # ── Run scan ───────────────────────────────────────────
     refresh_interval = scanner_cfg.get("refresh_interval", 60)
+
+    # ── Start Web Server if PORT environment variable is set ──
+    port = os.environ.get("PORT")
+    if port:
+        try:
+            port_num = int(port)
+            logger.info(f"PORT environment variable found. Starting web server on port {port_num}...")
+            web_thread = threading.Thread(target=start_web_server, args=(port_num,), daemon=True)
+            web_thread.start()
+        except Exception as e:
+            logger.error(f"Failed to start web server on port {port}: {e}")
 
     if args.once or demo_mode:
         run_scan(client, config, top_n=args.top)
