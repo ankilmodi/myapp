@@ -11,7 +11,7 @@ from typing import Dict, List
 import pandas as pd
 from loguru import logger
 
-from core.fo_stocks import FO_STOCK_LIST
+from core.fo_stocks import fetch_fo_stock_list
 from scanner.best_buy_formula import calculate_score
 
 
