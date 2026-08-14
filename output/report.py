@@ -150,11 +150,10 @@ def print_summary(stats: dict, timestamp: Optional[str] = None):
 
 
 # ─────────────────────────────────────────
-# Save CSV
+# CSV Export
 # ─────────────────────────────────────────
-def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
-    """Save results to CSV."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def generate_csv_content(df: pd.DataFrame) -> str:
+    """Generate CSV string with formatted Excel columns."""
     export_df = df[[
         "symbol", "ltp", "rsi", "smc_signal", "action_verdict",
         "stop_loss", "target_1", "target_2", "target_3", "score", "grade"
@@ -163,8 +162,20 @@ def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
         "Stock Ticker", "Current Price (₹)", "RSI Indicators", "Smart Money (SMC) Signal",
         "Action Verdict", "top Loss", "Target 1 (1M)", "Target 2 (1M)", "Target 3 (1M)", "Score", "Grade"
     ]
-    export_df.to_csv(path, index_label="rank")
-    logger.info(f"CSV saved → {path}")
+    return export_df.to_csv(index_label="rank")
+
+
+def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
+    """Save results to CSV file."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        csv_str = generate_csv_content(df)
+        with open(path, "w", encoding="utf-8-sig") as f:
+            f.write(csv_str)
+        logger.info(f"CSV saved → {path}")
+    except Exception as e:
+        logger.warning(f"Could not save CSV to disk: {e}")
+
 
 
 # ─────────────────────────────────────────
@@ -341,6 +352,33 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
             font-weight: 600;
         }}
 
+        /* Download Button */
+        .btn-download {{
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: #ffffff;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+            font-family: inherit;
+        }}
+        .btn-download:hover {{
+            background: linear-gradient(135deg, #059669, #047857);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+        }}
+        .btn-download:active {{
+            transform: translateY(0);
+        }}
+
         /* Legend */
         .legend {{
             display:flex; gap:24px; padding:8px 32px 20px; flex-wrap:wrap;
@@ -361,7 +399,10 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
         <h1>📈 NSE F&O <span>Best Buy</span> Scanner</h1>
         <div class="timestamp">Last Updated: {timestamp} | Auto-refresh: 60s</div>
     </div>
-    <span class="live-badge">⬤ LIVE</span>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <button onclick="downloadExcelCSV()" class="btn-download">📊 Export Excel / CSV</button>
+        <span class="live-badge">⬤ LIVE</span>
+    </div>
 </header>
 
 <!-- Stats -->
@@ -386,7 +427,10 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
 
 <!-- Table -->
 <div class="table-wrap">
-    <div class="section-title">📊 Ranked Stock List — Best Buy Formula (Score/100)</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+        <div class="section-title" style="margin:0; border:none; padding:0;">📊 Ranked Stock List — Best Buy Formula (Score/100)</div>
+        <button onclick="downloadExcelCSV()" class="btn-download">📥 Download Excel (CSV)</button>
+    </div>
     <table>
         <thead>
             <tr>
@@ -415,6 +459,35 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
     Formula: RSI(20) + MACD(20) + EMA(15) + Volume(15) + OI(15) + Supertrend(10) + 52W(5) = 100pts
     &nbsp;|&nbsp; <strong>Not financial advice.</strong>
 </footer>
+
+<script>
+function downloadExcelCSV() {{
+    var table = document.querySelector('table');
+    if (!table) return;
+    var rows = table.querySelectorAll('tr');
+    var csv = [];
+    for (var i = 0; i < rows.length; i++) {{
+        var row = [], cols = rows[i].querySelectorAll('td, th');
+        for (var j = 0; j < cols.length; j++) {{
+            var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, ' ').trim();
+            text = text.replace(/"/g, '""');
+            row.push('"' + text + '"');
+        }}
+        csv.push(row.join(','));
+    }}
+    var csvContent = '\\uFEFF' + csv.join('\\r\\n');
+    var blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    var date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = 'NSE_FO_Scanner_Results_' + date + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}}
+</script>
 </body>
 </html>"""
 

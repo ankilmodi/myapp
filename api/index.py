@@ -13,9 +13,10 @@ import yaml
 from core.angel_client import AngelClient
 from core.data_fetcher import DataFetcher
 from scanner.screener import FOScreener
-from output.report import generate_html_content
+from output.report import generate_html_content, generate_csv_content
 
 _cached_html = None
+_cached_csv = None
 _cached_time = None
 
 def load_config():
@@ -28,24 +29,24 @@ def load_config():
             pass
     return {}
 
-def get_dashboard_html():
-    global _cached_html, _cached_time
+def refresh_scanner_data():
+    global _cached_html, _cached_csv, _cached_time
     now = datetime.now()
     
     # Cache in memory for 60 seconds
     if _cached_html and _cached_time and (now - _cached_time).total_seconds() < 60:
-        return _cached_html
+        return _cached_html, _cached_csv
 
     config = load_config()
     angel_cfg = config.get("angel", {})
     scanner_cfg = config.get("scanner", {})
     
-    demo_mode = os.environ.get("DEMO_MODE", "true").lower() in ("1", "true", "yes")
+    demo_mode = os.environ.get("DEMO_MODE", "false").lower() in ("1", "true", "yes") or scanner_cfg.get("demo_mode", False)
     client = AngelClient(
-        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", "DEMO"),
-        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", "DEMO001"),
-        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", "demo123"),
-        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", "M5GULRYSDV7SCIJMHTZWLQMN5DMUVVQR"),
+        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", ""),
+        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", ""),
+        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", ""),
+        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", ""),
         demo_mode=demo_mode
     )
     client.login()
@@ -77,22 +78,30 @@ def get_dashboard_html():
         top_df = screener.top_picks(results_df, n=20)
         stats = screener.summary_stats(results_df)
         
-        # Generate HTML in memory (no disk write required)
-        html = generate_html_content(top_df, stats)
-        _cached_html = html
+        # Generate HTML and CSV in memory
+        _cached_html = generate_html_content(top_df, stats)
+        _cached_csv = "\ufeff" + generate_csv_content(top_df) # UTF-8 BOM for Excel
         _cached_time = now
-        return _cached_html
+        return _cached_html, _cached_csv
 
-    return "<h1>Scanner initializing... Please refresh in a few seconds.</h1>"
+    return "<h1>Scanner initializing... Please refresh in a few seconds.</h1>", ""
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            html = get_dashboard_html()
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(html.encode('utf-8'))
+            html, csv_data = refresh_scanner_data()
+            if "format=csv" in self.path or self.path.endswith(".csv") or "download=csv" in self.path or "download=excel" in self.path:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                self.send_response(200)
+                self.send_header('Content-type', 'text/csv; charset=utf-8')
+                self.send_header('Content-Disposition', f'attachment; filename="NSE_FO_Scanner_Results_{date_str}.csv"')
+                self.end_headers()
+                self.wfile.write(csv_data.encode('utf-8'))
+            else:
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(html.encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header('Content-type', 'text/plain; charset=utf-8')
@@ -100,4 +109,6 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(f"Server Error: {e}".encode('utf-8'))
 
 if __name__ == "__main__":
-    print(get_dashboard_html()[:200])
+    html, csv_str = refresh_scanner_data()
+    print(f"HTML generated successfully ({len(html)} bytes)")
+    print(f"CSV generated successfully ({len(csv_str)} bytes)")
