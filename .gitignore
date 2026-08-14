@@ -13,4 +13,3 @@ venv/
 # Application outputs and logs
 logs/
 output/results.csv
-output/dashboard.html

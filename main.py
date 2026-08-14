@@ -59,12 +59,39 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             return os.path.join(root, 'dashboard.html')
         return os.path.join(root, path)
 
+    def log_message(self, format, *args):
+        """Suppress HTTP access logs to keep output clean."""
+        pass
+
+
+LOADING_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta http-equiv="refresh" content="5">
+<title>NSE F&O Scanner — Loading...</title>
+<style>
+  body{margin:0;background:#0a0f1e;color:#e5e7eb;font-family:Inter,sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;}
+  .box{text-align:center;}
+  h1{font-size:2rem;color:#3b82f6;margin-bottom:12px;}
+  p{color:#9ca3af;font-size:1rem;}
+  .spinner{width:48px;height:48px;border:4px solid #1e2d40;
+           border-top-color:#3b82f6;border-radius:50%;
+           animation:spin 0.8s linear infinite;margin:24px auto;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style></head>
+<body><div class="box">
+  <div class="spinner"></div>
+  <h1>📈 NSE F&O Scanner</h1>
+  <p>Scanning 289 F&O stocks... Dashboard will appear in ~60 seconds.</p>
+  <p style="font-size:.8rem;margin-top:8px;color:#6b7280">Page auto-refreshes every 5 seconds.</p>
+</div></body></html>"""
+
 
 def start_web_server(port: int):
     os.makedirs("output", exist_ok=True)
     if not os.path.exists("output/dashboard.html"):
         with open("output/dashboard.html", "w", encoding="utf-8") as f:
-            f.write("<h1>Loading Scanner Dashboard... Please refresh in a few seconds.</h1>")
+            f.write(LOADING_HTML)
 
     handler = DashboardHandler
     socketserver.TCPServer.allow_reuse_address = True
@@ -188,13 +215,28 @@ def main():
 
     angel_cfg = config.get("angel", {})
     scanner_cfg = config.get("scanner", {})
+    refresh_interval = scanner_cfg.get("refresh_interval", 60)
+
+    # ── Detect cloud deployment (PORT env var) ─────────────
+    port = os.environ.get("PORT")
+
+    # ★ STEP 1: Start web server FIRST so health checks pass immediately
+    if port:
+        try:
+            port_num = int(port)
+            logger.info(f"PORT={port_num} detected. Starting web server immediately...")
+            web_thread = threading.Thread(target=start_web_server, args=(port_num,), daemon=True)
+            web_thread.start()
+            time.sleep(1)   # give server a moment to bind
+        except Exception as e:
+            logger.error(f"Failed to start web server on port {port}: {e}")
 
     # ── Demo mode override ─────────────────────────────────
     demo_mode = args.demo or scanner_cfg.get("demo_mode", False)
     if demo_mode:
         logger.info("🎮 Running in DEMO MODE (mock data, no API call)")
 
-    # ── Create Client ──────────────────────────────────────
+    # ★ STEP 2: Create client and login
     client = AngelClient(
         api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", "DEMO"),
         client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", "DEMO001"),
@@ -203,10 +245,19 @@ def main():
         demo_mode=demo_mode,
     )
 
-    # ── Login ──────────────────────────────────────────────
     if not client.login():
-        logger.error("Login failed. Use --demo flag for demo mode.")
-        sys.exit(1)
+        if port:
+            # In cloud mode — don't exit, fall back to demo so the web server keeps running
+            logger.warning("⚠️  Login failed in cloud mode. Falling back to DEMO mode.")
+            client = AngelClient(
+                api_key="DEMO", client_id="DEMO001",
+                password="demo123", totp_secret="JBSWY3DPEHPK3PXP",
+                demo_mode=True,
+            )
+            client.login()
+        else:
+            logger.error("Login failed. Use --demo flag for demo mode.")
+            sys.exit(1)
 
     profile = client.get_profile()
     if profile.get("status"):

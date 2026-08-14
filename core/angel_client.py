@@ -16,6 +16,8 @@ Usage:
 """
 
 import logging
+import os
+import sys
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -138,15 +140,26 @@ class AngelClient:
                 if self.totp_secret and self.totp_secret.strip() and "YOUR_TOTP_SECRET" not in self.totp_secret:
                     totp = pyotp.TOTP(self.totp_secret).now()
                 else:
-                    logger.warning("🔑 TOTP secret is not configured or empty. Requesting manual TOTP entry...")
-                    print("\n" + "=" * 60)
-                    print(f"👉 Enter the 6-digit TOTP code for account {self.client_id}")
-                    print("   (Check Google Authenticator or your AngelOne app)")
-                    print("=" * 60)
-                    totp = input("Enter 6-digit TOTP: ").strip()
-                    while not (totp.isdigit() and len(totp) == 6):
-                        logger.error("Invalid TOTP format. It must be exactly 6 digits.")
+                    # In cloud/non-interactive deployments, never block on input()
+                    is_interactive = sys.stdin.isatty() and not os.environ.get("PORT")
+                    if is_interactive:
+                        logger.warning("🔑 TOTP secret not configured. Requesting manual TOTP entry...")
+                        print("\n" + "=" * 60)
+                        print(f"👉 Enter the 6-digit TOTP code for account {self.client_id}")
+                        print("   (Check Google Authenticator or your AngelOne app)")
+                        print("=" * 60)
                         totp = input("Enter 6-digit TOTP: ").strip()
+                        while not (totp.isdigit() and len(totp) == 6):
+                            logger.error("Invalid TOTP format. It must be exactly 6 digits.")
+                            totp = input("Enter 6-digit TOTP: ").strip()
+                    else:
+                        logger.warning(
+                            "⚠️  TOTP secret not set and running in non-interactive (cloud) mode. "
+                            "Switching to DEMO mode automatically."
+                        )
+                        self.demo_mode = True
+                        self.obj = MockSmartConnect(self.api_key)
+                        totp = "000000"
 
             data = self.obj.generateSession(self.client_id, self.password, totp)
 
