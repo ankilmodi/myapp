@@ -170,9 +170,8 @@ def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
 # ─────────────────────────────────────────
 # HTML Report
 # ─────────────────────────────────────────
-def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboard.html"):
-    """Generate a styled HTML report/dashboard."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
+    """Generate a styled HTML report/dashboard string in memory."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Build table rows
@@ -419,7 +418,18 @@ def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboar
 </body>
 </html>"""
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
-    logger.success(f"HTML dashboard saved → {path}")
+    return html
+
+
+def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboard.html") -> str:
+    """Generate and save HTML report to disk (if writable)."""
+    html = generate_html_content(df, stats)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        logger.success(f"HTML dashboard saved → {path}")
+    except Exception as e:
+        logger.warning(f"Could not save HTML dashboard to disk: {e}")
     return path
+

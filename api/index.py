@@ -9,30 +9,43 @@ root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
+import yaml
 from core.angel_client import AngelClient
 from core.data_fetcher import DataFetcher
 from scanner.screener import FOScreener
-from output.report import save_html_report
+from output.report import generate_html_content
 
 _cached_html = None
 _cached_time = None
+
+def load_config():
+    config_path = os.path.join(root_dir, "config", "config.yaml")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                return yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    return {}
 
 def get_dashboard_html():
     global _cached_html, _cached_time
     now = datetime.now()
     
-    # Cache for 60 seconds
+    # Cache in memory for 60 seconds
     if _cached_html and _cached_time and (now - _cached_time).total_seconds() < 60:
         return _cached_html
 
-    dash_path = os.path.join(root_dir, "output", "dashboard.html")
+    config = load_config()
+    angel_cfg = config.get("angel", {})
+    scanner_cfg = config.get("scanner", {})
     
     demo_mode = os.environ.get("DEMO_MODE", "true").lower() in ("1", "true", "yes")
     client = AngelClient(
-        api_key=os.environ.get("ANGEL_API_KEY", "DEMO"),
-        client_id=os.environ.get("ANGEL_CLIENT_ID", "DEMO001"),
-        password=os.environ.get("ANGEL_PASSWORD", "demo123"),
-        totp_secret=os.environ.get("ANGEL_TOTP_SECRET", "JBSWY3DPEHPK3PXP"),
+        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", "DEMO"),
+        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", "DEMO001"),
+        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", "demo123"),
+        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", "M5GULRYSDV7SCIJMHTZWLQMN5DMUVVQR"),
         demo_mode=demo_mode
     )
     client.login()
@@ -49,7 +62,7 @@ def get_dashboard_html():
             return sym, df
         return None
 
-    # In serverless, screen first 50 stocks with threads for sub-second response
+    # Screen 50 stocks in parallel for instant sub-second response
     stocks_to_screen = FO_STOCK_LIST[:50]
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(fetch_one, s) for s in stocks_to_screen]
@@ -63,18 +76,14 @@ def get_dashboard_html():
         results_df = screener.run(ohlcv_data, use_threads=True)
         top_df = screener.top_picks(results_df, n=20)
         stats = screener.summary_stats(results_df)
-        os.makedirs(os.path.join(root_dir, "output"), exist_ok=True)
-        html_path = save_html_report(top_df, stats, path=dash_path)
-        with open(html_path, "r", encoding="utf-8") as f:
-            _cached_html = f.read()
+        
+        # Generate HTML in memory (no disk write required)
+        html = generate_html_content(top_df, stats)
+        _cached_html = html
         _cached_time = now
         return _cached_html
 
-    if os.path.exists(dash_path):
-        with open(dash_path, "r", encoding="utf-8") as f:
-            return f.read()
-            
-    return "<h1>Scanner is initializing... Please refresh in a moment.</h1>"
+    return "<h1>Scanner initializing... Please refresh in a few seconds.</h1>"
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
