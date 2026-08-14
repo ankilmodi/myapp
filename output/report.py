@@ -43,24 +43,22 @@ def print_rich_table(df: pd.DataFrame, title: str = "🏆 NSE F&O Best Buy Scann
         title_style="bold magenta",
     )
 
-    table.add_column("Rank", style="bold white", justify="center", width=6)
-    table.add_column("Symbol", style="bold yellow", width=14)
-    table.add_column("LTP ₹", style="white", justify="right", width=10)
+    table.add_column("Rank", style="bold white", justify="center", width=5)
+    table.add_column("Stock Ticker", style="bold yellow", width=14)
+    table.add_column("Current Price (₹)", style="white", justify="right", width=18)
+    table.add_column("RSI Indicators", justify="right", width=15)
+    table.add_column("Smart Money (SMC) Signal", justify="center", width=26)
+    table.add_column("Action Verdict", justify="center", width=22)
+    table.add_column("top Loss", style="bold red", justify="right", width=12)
+    table.add_column("Target 1 (1M)", style="bold green", justify="right", width=14)
+    table.add_column("Target 2 (1M)", style="bold green", justify="right", width=14)
+    table.add_column("Target 3 (1M)", style="bold green", justify="right", width=14)
     table.add_column("Score", style="bold", justify="center", width=8)
-    table.add_column("Grade", style="bold", justify="center", width=7)
-    table.add_column("Signal", width=16)
-    table.add_column("RSI", justify="right", width=7)
-    table.add_column("MACD", justify="right", width=8)
-    table.add_column("EMA", justify="right", width=7)
-    table.add_column("Vol", justify="right", width=8)
-    table.add_column("OI", justify="right", width=8)
-    table.add_column("ST", justify="center", width=6)
 
     for rank, row in df.iterrows():
         score = row.get("score", 0)
-        grade = row.get("grade", "N/A")
-        signal = row.get("signal", "")
-        bd = row.get("breakdown", {})
+        smc = row.get("smc_signal", "RETAIL CONSOLIDATION")
+        action = row.get("action_verdict", "HOLD")
 
         # Color the score
         if score >= 80:
@@ -72,19 +70,32 @@ def print_rich_table(df: pd.DataFrame, title: str = "🏆 NSE F&O Best Buy Scann
         else:
             score_style = "[bold red]"
 
+        # SMC style
+        if "INSTITUTIONAL" in smc:
+            smc_style = "[bold cyan]INSTITUTIONAL BUY FLOW[/]"
+        else:
+            smc_style = "[dim white]RETAIL CONSOLIDATION[/]"
+
+        # Action style
+        if "BUY" in action:
+            action_style = "[bold green]BUY / ACCUMULATE[/]"
+        elif "SELL" in action:
+            action_style = "[bold red]SELL / BOOK PROFIT[/]"
+        else:
+            action_style = "[bold yellow]HOLD[/]"
+
         table.add_row(
             str(rank),
             str(row.get("symbol", "")),
             f"₹{row.get('ltp', 0):,.2f}",
+            f"{row.get('rsi', 0):.2f}",
+            smc_style,
+            action_style,
+            f"₹{row.get('stop_loss', 0):,.2f}",
+            f"₹{row.get('target_1', 0):,.2f}",
+            f"₹{row.get('target_2', 0):,.2f}",
+            f"₹{row.get('target_3', 0):,.2f}",
             f"{score_style}{score:.1f}[/]",
-            grade,
-            signal,
-            f"{row.get('rsi', 0):.1f}",
-            f"{bd.get('MACD', 0):.1f}",
-            f"{bd.get('EMA Trend', 0):.1f}",
-            f"{bd.get('Volume Surge', 0):.1f}",
-            f"{bd.get('OI Build-Up', 0):.1f}",
-            "✅" if bd.get("Supertrend", 0) > 0 else "❌",
         )
 
     console.print(table)
@@ -92,18 +103,24 @@ def print_rich_table(df: pd.DataFrame, title: str = "🏆 NSE F&O Best Buy Scann
 
 def _print_plain_table(df: pd.DataFrame, title: str):
     """Fallback plain text table."""
-    print(f"\n{'='*80}")
+    print(f"\n{'='*120}")
     print(f"  {title}")
     print(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*80}")
-    print(f"{'Rank':>5} {'Symbol':>12} {'LTP':>10} {'Score':>7} {'Grade':>6} {'Signal':>14} {'RSI':>6}")
-    print("-" * 70)
+    print(f"{'='*120}")
+    print(
+        f"{'Rank':>5} {'Stock Ticker':>14} {'Current Price':>15} {'RSI':>8} "
+        f"{'SMC Signal':>25} {'Action Verdict':>22} {'top Loss':>12} "
+        f"{'Target 1':>12} {'Target 2':>12} {'Target 3':>12}"
+    )
+    print("-" * 140)
     for rank, row in df.iterrows():
         print(
-            f"{rank:>5} {row['symbol']:>12} {row['ltp']:>10.2f} "
-            f"{row['score']:>7.1f} {row['grade']:>6} {row['signal']:>14} {row['rsi']:>6.1f}"
+            f"{rank:>5} {row['symbol']:>14} {row['ltp']:>13.2f} {row['rsi']:>8.2f} "
+            f"{row.get('smc_signal', 'N/A'):>25} {row.get('action_verdict', 'HOLD'):>22} "
+            f"₹{row.get('stop_loss', 0):>10.2f} "
+            f"₹{row.get('target_1', 0):>10.2f} ₹{row.get('target_2', 0):>10.2f} ₹{row.get('target_3', 0):>10.2f}"
         )
-    print(f"{'='*80}\n")
+    print(f"{'='*120}\n")
 
 
 # ─────────────────────────────────────────
@@ -138,8 +155,14 @@ def print_summary(stats: dict, timestamp: Optional[str] = None):
 def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
     """Save results to CSV."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Flatten breakdown dict
-    export_df = df[["symbol", "score", "grade", "signal", "ltp", "rsi"]].copy()
+    export_df = df[[
+        "symbol", "ltp", "rsi", "smc_signal", "action_verdict",
+        "stop_loss", "target_1", "target_2", "target_3", "score", "grade"
+    ]].copy()
+    export_df.columns = [
+        "Stock Ticker", "Current Price (₹)", "RSI Indicators", "Smart Money (SMC) Signal",
+        "Action Verdict", "top Loss", "Target 1 (1M)", "Target 2 (1M)", "Target 3 (1M)", "Score", "Grade"
+    ]
     export_df.to_csv(path, index_label="rank")
     logger.info(f"CSV saved → {path}")
 
@@ -165,21 +188,31 @@ def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboar
         else:
             row_class = "avoid"
 
-        bd = row.get("breakdown", {})
+        smc = row.get("smc_signal", "RETAIL CONSOLIDATION")
+        smc_class = "smc-institutional" if "INSTITUTIONAL" in smc else "smc-retail"
+        
+        action = row.get("action_verdict", "HOLD")
+        if "BUY" in action:
+            action_class = "action-buy"
+        elif "SELL" in action:
+            action_class = "action-sell"
+        else:
+            action_class = "action-hold"
+
         rows_html += f"""
         <tr class="{row_class}">
             <td>{rank}</td>
             <td><strong>{row.get('symbol', '')}</strong></td>
             <td>₹{row.get('ltp', 0):,.2f}</td>
+            <td>{row.get('rsi', 0):.2f}</td>
+            <td><span class="badge {smc_class}">{smc}</span></td>
+            <td><span class="badge {action_class}">{action}</span></td>
+            <td class="stop-loss">₹{row.get('stop_loss', 0):,.2f}</td>
+            <td class="target">₹{row.get('target_1', 0):,.2f}</td>
+            <td class="target">₹{row.get('target_2', 0):,.2f}</td>
+            <td class="target">₹{row.get('target_3', 0):,.2f}</td>
             <td><span class="score-badge">{score:.1f}</span></td>
             <td>{row.get('grade', '')}</td>
-            <td>{row.get('signal', '')}</td>
-            <td>{row.get('rsi', 0):.1f}</td>
-            <td>{bd.get('MACD', 0):.1f}</td>
-            <td>{bd.get('EMA Trend', 0):.1f}</td>
-            <td>{bd.get('Volume Surge', 0):.1f}</td>
-            <td>{bd.get('OI Build-Up', 0):.1f}</td>
-            <td>{'✅' if bd.get('Supertrend', 0) > 0 else '❌'}</td>
         </tr>"""
 
     html = f"""<!DOCTYPE html>
@@ -195,6 +228,7 @@ def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboar
             --bg: #0a0f1e; --card: #111827; --border: #1e2d40;
             --accent: #3b82f6; --green: #10b981; --yellow: #f59e0b;
             --red: #ef4444; --text: #e5e7eb; --sub: #9ca3af;
+            --cyan: #06b6d4;
         }}
         * {{ margin:0; padding:0; box-sizing:border-box; }}
         body {{ font-family:'Inter',sans-serif; background:var(--bg); color:var(--text);
@@ -263,6 +297,51 @@ def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboar
         .avoid .score-badge {{ background:#ef444420; color:var(--red); }}
         .watch .score-badge {{ background:#f59e0b20; color:var(--yellow); }}
 
+        /* Badges */
+        .badge {{
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }}
+        .smc-institutional {{
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--cyan);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }}
+        .smc-retail {{
+            background: rgba(156, 163, 175, 0.15);
+            color: var(--sub);
+            border: 1px solid rgba(156, 163, 175, 0.3);
+        }}
+        .action-buy {{
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }}
+        .action-hold {{
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--yellow);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }}
+        .action-sell {{
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--red);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }}
+        
+        .stop-loss {{
+            color: #f87171;
+            font-weight: 600;
+        }}
+        .target {{
+            color: #34d399;
+            font-weight: 600;
+        }}
+
         /* Legend */
         .legend {{
             display:flex; gap:24px; padding:8px 32px 20px; flex-wrap:wrap;
@@ -312,9 +391,18 @@ def save_html_report(df: pd.DataFrame, stats: dict, path: str = "output/dashboar
     <table>
         <thead>
             <tr>
-                <th>#</th><th>Symbol</th><th>LTP ₹</th><th>Score</th><th>Grade</th>
-                <th>Signal</th><th>RSI</th><th>MACD</th><th>EMA</th>
-                <th>Vol</th><th>OI</th><th>ST</th>
+                <th>#</th>
+                <th>Stock Ticker</th>
+                <th>Current Price (₹)</th>
+                <th>RSI Indicators</th>
+                <th>Smart Money (SMC) Signal</th>
+                <th>Action Verdict</th>
+                <th>top Loss</th>
+                <th>Target 1 (1M)</th>
+                <th>Target 2 (1M)</th>
+                <th>Target 3 (1M)</th>
+                <th>Score</th>
+                <th>Grade</th>
             </tr>
         </thead>
         <tbody>

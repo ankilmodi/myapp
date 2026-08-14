@@ -226,7 +226,17 @@ def main():
         except Exception as e:
             logger.error(f"Failed to start web server on port {port}: {e}")
 
-    if args.once or demo_mode:
+    # ── When deployed (PORT set), always loop to keep dashboard fresh ──
+    if port:
+        logger.info(f"☁️  Deployed mode: continuous scan every {refresh_interval}s. Dashboard auto-refreshes.")
+        try:
+            while True:
+                run_scan(client, config, top_n=args.top)
+                logger.info(f"Next scan in {refresh_interval}s...")
+                time.sleep(refresh_interval)
+        except KeyboardInterrupt:
+            logger.info("Scanner stopped.")
+    elif args.once or demo_mode:
         run_scan(client, config, top_n=args.top)
     else:
         logger.info(f"Live mode: refreshing every {refresh_interval} seconds. Press Ctrl+C to stop.")

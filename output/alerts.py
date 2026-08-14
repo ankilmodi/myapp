@@ -48,8 +48,10 @@ class TelegramAlert:
             emoji = "🔥" if pick["score"] >= 80 else "✅"
             msg += (
                 f"{i}. {emoji} <b>{pick['symbol']}</b> — "
-                f"Score: <b>{pick['score']:.1f}/100</b> | "
-                f"₹{pick['ltp']:.2f} | RSI:{pick['rsi']:.1f}\n"
+                f"Score: <b>{pick['score']:.1f}</b> | "
+                f"LTP: ₹{pick['ltp']:.2f} | RSI: {pick['rsi']:.1f}\n"
+                f"   Verdict: <b>{pick.get('action_verdict', 'HOLD')}</b> | SMC: {pick.get('smc_signal', 'N/A')}\n"
+                f"   SL: <b>₹{pick.get('stop_loss', 0):.2f}</b> | T1: <b>₹{pick.get('target_1', 0):.2f}</b> | T2: <b>₹{pick.get('target_2', 0):.2f}</b>\n"
             )
         msg += "\n<i>⚠️ Not financial advice. Do your own research.</i>"
         self.send(msg)

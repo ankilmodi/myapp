@@ -262,3 +262,32 @@ def oi_buildup_score(prev_oi: float, curr_oi: float, prev_price: float, curr_pri
         score = 0.0
 
     return {"signal": signal, "score": score, "oi_up": oi_up, "price_up": price_up}
+
+
+# ─────────────────────────────────────────
+# ATR – Average True Range (14)
+# ─────────────────────────────────────────
+def atr(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    Calculate ATR(14). Returns current ATR value.
+    Used for Stop Loss and Target calculations.
+    """
+    if len(df) < period + 1:
+        # Fallback to 2% of current price if data is insufficient
+        return round(df["close"].iloc[-1] * 0.02, 2)
+    high = df["high"].values.astype(float)
+    low = df["low"].values.astype(float)
+    close = df["close"].values.astype(float)
+    tr = np.maximum(
+        high[1:] - low[1:],
+        np.maximum(
+            np.abs(high[1:] - close[:-1]),
+            np.abs(low[1:] - close[:-1])
+        )
+    )
+    atr_vals = np.zeros(len(close))
+    atr_vals[period] = np.mean(tr[:period])
+    for i in range(period + 1, len(close)):
+        atr_vals[i] = (atr_vals[i - 1] * (period - 1) + tr[i - 1]) / period
+    return round(atr_vals[-1], 2)
+

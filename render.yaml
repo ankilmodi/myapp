@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: nse-fo-scanner
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py --demo
+    envVars:
+      - key: PORT
+        generateValue: true
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_ID
+        sync: false
+      - key: ANGEL_PASSWORD
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false

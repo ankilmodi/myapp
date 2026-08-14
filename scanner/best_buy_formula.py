@@ -29,6 +29,7 @@ import pandas as pd
 from loguru import logger
 
 from core.indicators import (
+    atr,
     ema_trend_score,
     macd,
     near_52w_high,
@@ -167,6 +168,46 @@ def calculate_score(
     total_score = sum(breakdown.values())
     total_score = round(min(total_score, 100), 1)
 
+    # ── Additional Columns Calculation (Excel representation) ──
+    # 1. SMC Signal
+    vol_ratio = vol_data.get("ratio", 1.0)
+    oi_signal = oi_data.get("signal", "")
+    macd_bullish = macd_data.get("bullish_crossover", False)
+    if vol_ratio >= 1.2 or oi_signal in ["Long Build-Up", "Short Covering"] or macd_bullish:
+        smc_signal = "INSTITUTIONAL BUY FLOW"
+    else:
+        smc_signal = "RETAIL CONSOLIDATION"
+
+    # 2. Action Verdict
+    st_bullish = st_data.get("bullish", False)
+    if rsi_val > 75:
+        action_verdict = "SELL / BOOK PROFIT"
+    elif 70 <= rsi_val <= 75:
+        action_verdict = "HOLD"
+    elif rsi_val < 45:
+        action_verdict = "SELL / BOOK PROFIT"
+    else: # RSI is between 45 and 70
+        if st_bullish and macd_bullish and total_score >= 50:
+            action_verdict = "BUY / ACCUMULATE"
+        elif not st_bullish or not macd_bullish:
+            action_verdict = "SELL / BOOK PROFIT"
+        else:
+            action_verdict = "HOLD"
+
+    # 3. ATR
+    atr_val = atr(df)
+
+    # 4. Stop Loss & Targets
+    st_val = st_data.get("value", 0.0)
+    if st_bullish and st_val > 0 and st_val < curr_price:
+        stop_loss = st_val
+    else:
+        stop_loss = round(curr_price - 1.5 * atr_val, 2)
+
+    target_1 = round(curr_price + atr_val, 2)
+    target_2 = round(curr_price + 2 * atr_val, 2)
+    target_3 = round(curr_price + 3 * atr_val, 2)
+
     return {
         "symbol": symbol,
         "score": total_score,
@@ -174,6 +215,12 @@ def calculate_score(
         "signal": _signal(total_score),
         "ltp": round(curr_price, 2),
         "rsi": rsi_val,
+        "smc_signal": smc_signal,
+        "action_verdict": action_verdict,
+        "stop_loss": stop_loss,
+        "target_1": target_1,
+        "target_2": target_2,
+        "target_3": target_3,
         "breakdown": breakdown,
         "indicators": indicators_detail,
         "error": None,
@@ -214,6 +261,12 @@ def _empty_result(symbol: str, error: str) -> dict:
         "signal": "❌ NO DATA",
         "ltp": 0.0,
         "rsi": 0.0,
+        "smc_signal": "N/A",
+        "action_verdict": "HOLD",
+        "stop_loss": 0.0,
+        "target_1": 0.0,
+        "target_2": 0.0,
+        "target_3": 0.0,
         "breakdown": {},
         "indicators": {},
         "error": error,
