@@ -36,7 +36,7 @@ from output.report import generate_html_content, generate_csv_content
 _cached_html: str = ""
 _cached_csv: str = ""
 _cached_time: datetime = None
-CACHE_TTL_SECONDS = 90  # refresh every 90 seconds
+CACHE_TTL_SECONDS = 120  # refresh every 120 seconds
 
 
 def load_config() -> dict:
@@ -156,8 +156,8 @@ def refresh_data() -> tuple:
         client=client,
         interval="ONE_DAY",
         history_days=100,
-        rate_delay=0.4,
-        max_stocks=50,
+        rate_delay=0.3,   # 0.3s delay = ~20 stocks in ~15s (well within 60s)
+        max_stocks=20,    # Top 20 F&O stocks per scan
     )
 
     ohlcv_data = fetcher.fetch_all_ohlcv()
