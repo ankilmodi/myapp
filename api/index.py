@@ -49,8 +49,13 @@ def refresh_scanner_data():
         totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", ""),
         demo_mode=demo_mode
     )
-    client.login()
-    
+    status_banner = ""
+    logged_in = client.login()
+    if logged_in and not client.demo_mode:
+        status_banner = f"<span style='color:#34d399; font-weight:600;'>🟢 LIVE Angel One SmartAPI Connected (Account: {client.client_id})</span>"
+    elif client.last_error:
+        status_banner = f"<span style='color:#f87171;'>⚠️ Angel One SmartAPI Notice: <strong>{client.last_error}</strong> &bull; Please check TOTP key from Angel One portal.</span>"
+
     fetcher = DataFetcher(client=client, interval="ONE_DAY", history_days=100)
     ohlcv_data = {}
     from core.fo_stocks import FO_STOCK_LIST
@@ -79,7 +84,7 @@ def refresh_scanner_data():
         stats = screener.summary_stats(results_df)
         
         # Generate HTML and CSV in memory
-        _cached_html = generate_html_content(top_df, stats)
+        _cached_html = generate_html_content(top_df, stats, status_banner=status_banner)
         _cached_csv = "\ufeff" + generate_csv_content(top_df) # UTF-8 BOM for Excel
         _cached_time = now
         return _cached_html, _cached_csv

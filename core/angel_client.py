@@ -125,6 +125,7 @@ class AngelClient:
         self.refresh_token: str = ""
         self.feed_token: str = ""
         self.session_valid: bool = False
+        self.last_error: str = ""
 
     # ─────────────────────────────────────────────
     # Login / Session
@@ -168,16 +169,19 @@ class AngelClient:
                 self.refresh_token = data["data"]["refreshToken"]
                 self.feed_token = data["data"]["feedToken"]
                 self.session_valid = True
+                self.last_error = ""
                 logger.success(
                     f"✅ Logged in as {self.client_id} "
                     f"{'[DEMO]' if self.demo_mode else '[LIVE]'}"
                 )
                 return True
             else:
+                self.last_error = f"{data.get('message', 'Login failed')} (Code: {data.get('errorcode', '')})"
                 logger.error(f"Login failed: {data}")
                 return False
 
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Login exception: {e}")
             return False
 

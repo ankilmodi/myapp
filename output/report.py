@@ -181,7 +181,7 @@ def save_csv(df: pd.DataFrame, path: str = "output/results.csv"):
 # ─────────────────────────────────────────
 # HTML Report
 # ─────────────────────────────────────────
-def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
+def generate_html_content(df: pd.DataFrame, stats: dict, status_banner: str = "") -> str:
     """Generate a styled HTML report/dashboard string in memory."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -224,6 +224,14 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
             <td><span class="score-badge">{score:.1f}</span></td>
             <td>{row.get('grade', '')}</td>
         </tr>"""
+
+    status_banner_html = ""
+    if status_banner:
+        status_banner_html = f"""
+<div style="margin: 0 32px 20px; padding: 12px 20px; background: #1e293b; border: 1px solid var(--border); border-radius: 10px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+    {status_banner}
+</div>"""
+
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -404,6 +412,8 @@ def generate_html_content(df: pd.DataFrame, stats: dict) -> str:
         <span class="live-badge">⬤ LIVE</span>
     </div>
 </header>
+
+{status_banner_html}
 
 <!-- Stats -->
 <div class="stats-grid">
