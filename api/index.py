@@ -14,13 +14,20 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import with error handling
+IMPORTS_OK = True
+import_errors = []
+
 try:
     import pyotp
-    from SmartApi import SmartConnect
-    IMPORTS_OK = True
 except Exception as e:
     IMPORTS_OK = False
-    print(f"Import error: {e}")
+    import_errors.append(f"pyotp: {str(e)}")
+
+try:
+    from SmartApi import SmartConnect
+except Exception as e:
+    IMPORTS_OK = False
+    import_errors.append(f"SmartApi: {str(e)}")
 
 # Cache for stock data
 _cache = {
@@ -31,6 +38,11 @@ _cache = {
 
 def get_live_stock_data():
     """Fetch live stock data from Angel One API"""
+    
+    # Check imports first
+    if not IMPORTS_OK:
+        error_msg = "Required libraries not available: " + ", ".join(import_errors)
+        return {"error": error_msg, "stocks": [], "import_errors": import_errors}
     
     # Check cache
     now = datetime.now()
@@ -47,9 +59,6 @@ def get_live_stock_data():
     
     if not all([api_key, client_id, password, totp_secret]):
         return {"error": "Credentials not configured", "stocks": []}
-    
-    if not IMPORTS_OK:
-        return {"error": "Required libraries not available", "stocks": []}
     
     try:
         # Login to Angel One
@@ -150,7 +159,10 @@ def get_html(stock_data):
     
     # Status message
     if stock_data.get("error"):
-        status_msg = f'<div class="error-box">❌ {stock_data["error"]}</div>'
+        error_detail = stock_data.get("error", "Unknown error")
+        if stock_data.get("import_errors"):
+            error_detail += "<br><small>Import errors: " + "<br>".join(stock_data["import_errors"]) + "</small>"
+        status_msg = f'<div class="error-box">❌ {error_detail}</div>'
     elif stock_data.get("stocks"):
         status_msg = f'''<div class="success-box">
             ✅ Live data from Angel One API<br>
