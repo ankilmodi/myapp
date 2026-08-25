@@ -36,7 +36,8 @@ from output.report import generate_html_content, generate_csv_content
 _cached_html: str = ""
 _cached_csv: str = ""
 _cached_time: datetime = None
-CACHE_TTL_SECONDS = 120  # refresh every 120 seconds
+_version = "3.0"  # Increment to force cache clear - v3.0 fixes price issues
+CACHE_TTL_SECONDS = 30  # refresh every 30 seconds for faster data updates
 
 
 def load_config() -> dict:
@@ -126,6 +127,7 @@ def refresh_data() -> tuple:
         demo_mode=False,
     )
 
+    logger.info(f"🔐 Attempting login with API key: {creds['api_key'][:4]}... | Client: {creds['client_id']}")
     login_ok = client.login()
 
     if not login_ok:
@@ -143,12 +145,6 @@ def refresh_data() -> tuple:
         _cached_time = now
         return html, ""
 
-    status_banner = (
-        f"<span style='color:#34d399; font-weight:600;'>"
-        f"🟢 LIVE Angel One SmartAPI — Account: {client.client_id} | "
-        f"Updated: {now.strftime('%d %b %Y %H:%M:%S')}"
-        f"</span>"
-    )
     logger.success(f"Angel One login OK: {client.client_id}")
 
     # ── Step 3: Fetch live data from Angel One (no hardcoded data) ────────────
@@ -156,8 +152,8 @@ def refresh_data() -> tuple:
         client=client,
         interval="ONE_DAY",
         history_days=100,
-        rate_delay=0.3,   # 0.3s delay = ~20 stocks in ~15s (well within 60s)
-        max_stocks=20,    # Top 20 F&O stocks per scan
+        rate_delay=1.0,   # 1.0s delay to avoid rate limit (Angel One max ~2 req/sec)
+        max_stocks=15,    # Top 15 F&O stocks per scan (stay within rate limits)
     )
 
     ohlcv_data = fetcher.fetch_all_ohlcv()
@@ -172,6 +168,15 @@ def refresh_data() -> tuple:
         _cached_csv = ""
         _cached_time = now
         return html, ""
+
+    # ── Step 3b: Create status banner with live data info ─────────────────────
+    status_banner = (
+        f"<span style='color:#34d399; font-weight:600;'>"
+        f"🟢 LIVE Angel One SmartAPI v{_version} — Account: {client.client_id} | "
+        f"Updated: {now.strftime('%d %b %Y %H:%M:%S')} | "
+        f"API Key: {creds['api_key'][:4]}*** | Stocks: {len(ohlcv_data)}"
+        f"</span>"
+    )
 
     # ── Step 4: Run Best-Buy screening formula ────────────────────────────────
     screener = FOScreener(min_score=30, top_n=20)

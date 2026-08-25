@@ -1,58 +1,267 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="5">
-  <title>NSE F&O Scanner — Loading...</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <style>
-    body {
-      margin: 0;
-      background: #0a0f1e;
-      color: #e5e7eb;
-      font-family: Inter, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-    }
-    .box { text-align: center; }
-    h1 { font-size: 2rem; color: #3b82f6; margin-bottom: 12px; }
-    p { color: #9ca3af; font-size: 1rem; }
-    .spinner {
-      width: 56px; height: 56px;
-      border: 5px solid #1e2d40;
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin: 24px auto;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .badge {
-      display: inline-block;
-      background: rgba(16,185,129,0.2);
-      color: #10b981;
-      padding: 4px 14px;
-      border-radius: 20px;
-      font-size: .75rem;
-      font-weight: 600;
-      border: 1px solid #10b981;
-      margin-bottom: 20px;
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="60">
+    <title>NSE F&O Best Buy Scanner | Angel One</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0f1e; --card: #111827; --border: #1e2d40;
+            --accent: #3b82f6; --green: #10b981; --yellow: #f59e0b;
+            --red: #ef4444; --text: #e5e7eb; --sub: #9ca3af;
+            --cyan: #06b6d4;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text);
+                min-height:100vh; }
+
+        /* ─── Header ─── */
+        header {
+            background: linear-gradient(135deg,#1e3a5f,#0a1628);
+            padding: 24px 32px;
+            border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        header h1 { font-size:1.6rem; font-weight:700; }
+        header h1 span { color: var(--accent); }
+        .timestamp { font-size:.8rem; color:var(--sub); }
+        .live-badge {
+            background: #10b98133; color: var(--green);
+            padding: 4px 12px; border-radius: 20px; font-size:.75rem; font-weight:600;
+            border: 1px solid var(--green); animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+        /* ─── Stats Cards ─── */
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 16px; padding: 24px 32px;
+        }
+        .stat-card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px; text-align: center;
+        }
+        .stat-card .label { font-size:.75rem; color:var(--sub); margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em; }
+        .stat-card .value { font-size:2rem; font-weight:700; }
+        .stat-card.green .value { color:var(--green); }
+        .stat-card.yellow .value { color:var(--yellow); }
+        .stat-card.blue .value { color:var(--accent); }
+        .stat-card.red .value { color:var(--red); }
+
+        /* ─── Table ─── */
+        .table-wrap { padding: 0 32px 40px; overflow-x:auto; }
+        .section-title {
+            font-size:1.1rem; font-weight:600; margin-bottom:16px;
+            padding: 16px 0 8px; border-bottom:1px solid var(--border);
+        }
+        table { width:100%; border-collapse:collapse; font-size:.85rem; }
+        thead th {
+            background:#0d1829; padding:12px 16px; text-align:left;
+            color:var(--sub); font-weight:500; text-transform:uppercase;
+            font-size:.7rem; letter-spacing:.08em; position:sticky; top:0;
+        }
+        tbody tr { border-bottom:1px solid #ffffff0a; transition:background .15s; }
+        tbody tr:hover { background:#ffffff08; }
+        tbody td { padding:12px 16px; }
+
+        /* Row classes */
+        .strong-buy { border-left: 3px solid var(--green); }
+        .buy { border-left: 3px solid var(--accent); }
+        .watch { border-left: 3px solid var(--yellow); }
+        .avoid { border-left: 3px solid var(--red); }
+
+        .score-badge {
+            background: #3b82f620; color:var(--accent); font-weight:700;
+            padding:3px 10px; border-radius:20px; font-size:.85rem;
+        }
+        .strong-buy .score-badge { background:#10b98120; color:var(--green); }
+        .avoid .score-badge { background:#ef444420; color:var(--red); }
+        .watch .score-badge { background:#f59e0b20; color:var(--yellow); }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .smc-institutional {
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--cyan);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+        .smc-retail {
+            background: rgba(156, 163, 175, 0.15);
+            color: var(--sub);
+            border: 1px solid rgba(156, 163, 175, 0.3);
+        }
+        .action-buy {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .action-hold {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--yellow);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        .action-sell {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--red);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        
+        .stop-loss {
+            color: #f87171;
+            font-weight: 600;
+        }
+        .target {
+            color: #34d399;
+            font-weight: 600;
+        }
+
+        /* Download Button */
+        .btn-download {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: #ffffff;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+            font-family: inherit;
+        }
+        .btn-download:hover {
+            background: linear-gradient(135deg, #059669, #047857);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+        }
+        .btn-download:active {
+            transform: translateY(0);
+        }
+
+        /* Legend */
+        .legend {
+            display:flex; gap:24px; padding:8px 32px 20px; flex-wrap:wrap;
+        }
+        .leg { display:flex; align-items:center; gap:8px; font-size:.8rem; color:var(--sub); }
+        .leg-dot { width:12px; height:12px; border-radius:50%; }
+
+        footer {
+            text-align:center; padding:20px; color:var(--sub); font-size:.75rem;
+            border-top:1px solid var(--border);
+        }
+    </style>
 </head>
 <body>
-  <div class="box">
-    <span class="badge">⬤ STARTING UP</span>
-    <div class="spinner"></div>
-    <h1>📈 NSE F&amp;O Best Buy Scanner</h1>
-    <p>Scanning 289 F&amp;O stocks across all indicators...</p>
-    <p>Dashboard will be ready in ~60 seconds.</p>
-    <p style="font-size:.8rem;margin-top:16px;color:#6b7280">
-      Page auto-refreshes every 5 seconds.
-    </p>
-  </div>
+
+<header>
+    <div>
+        <h1>📈 NSE F&O <span>Best Buy</span> Scanner</h1>
+        <div class="timestamp">Last Updated: 2026-08-14 16:38:38 | Auto-refresh: 60s</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <button onclick="downloadExcelCSV()" class="btn-download">📊 Export Excel / CSV</button>
+        <span class="live-badge">⬤ LIVE</span>
+    </div>
+</header>
+
+
+
+<!-- Stats -->
+<div class="stats-grid">
+    <div class="stat-card"><div class="label">Total Screened</div><div class="value">3</div></div>
+    <div class="stat-card green"><div class="label">🔥 Strong Buy</div><div class="value">0</div></div>
+    <div class="stat-card blue"><div class="label">✅ Buy</div><div class="value">0</div></div>
+    <div class="stat-card yellow"><div class="label">⚠️ Watch</div><div class="value">0</div></div>
+    <div class="stat-card red"><div class="label">❌ Avoid</div><div class="value">3</div></div>
+    <div class="stat-card"><div class="label">Avg Score</div><div class="value">36.3</div></div>
+    <div class="stat-card green"><div class="label">🏆 Top Pick</div>
+        <div class="value" style="font-size:1.2rem">360ONE</div></div>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+    <div class="leg"><div class="leg-dot" style="background:#10b981"></div>Strong Buy (80-100)</div>
+    <div class="leg"><div class="leg-dot" style="background:#3b82f6"></div>Buy (60-79)</div>
+    <div class="leg"><div class="leg-dot" style="background:#f59e0b"></div>Watch (40-59)</div>
+    <div class="leg"><div class="leg-dot" style="background:#ef4444"></div>Avoid (0-39)</div>
+</div>
+
+<!-- Table -->
+<div class="table-wrap">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+        <div class="section-title" style="margin:0; border:none; padding:0;">📊 Ranked Stock List — Best Buy Formula (Score/100)</div>
+        <button onclick="downloadExcelCSV()" class="btn-download">📥 Download Excel (CSV)</button>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Stock Ticker</th>
+                <th>Current Price (₹)</th>
+                <th>RSI Indicators</th>
+                <th>Smart Money (SMC) Signal</th>
+                <th>Action Verdict</th>
+                <th>top Loss</th>
+                <th>Target 1 (1M)</th>
+                <th>Target 2 (1M)</th>
+                <th>Target 3 (1M)</th>
+                <th>Score</th>
+                <th>Grade</th>
+            </tr>
+        </thead>
+        <tbody>
+            
+        </tbody>
+    </table>
+</div>
+
+<footer>
+    🤖 Angel One SmartAPI + NSE F&O Best Buy Scanner &nbsp;|&nbsp;
+    Formula: RSI(20) + MACD(20) + EMA(15) + Volume(15) + OI(15) + Supertrend(10) + 52W(5) = 100pts
+    &nbsp;|&nbsp; <strong>Not financial advice.</strong>
+</footer>
+
+<script>
+function downloadExcelCSV() {
+    var table = document.querySelector('table');
+    if (!table) return;
+    var rows = table.querySelectorAll('tr');
+    var csv = [];
+    for (var i = 0; i < rows.length; i++) {
+        var row = [], cols = rows[i].querySelectorAll('td, th');
+        for (var j = 0; j < cols.length; j++) {
+            var text = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, ' ').trim();
+            text = text.replace(/"/g, '""');
+            row.push('"' + text + '"');
+        }
+        csv.push(row.join(','));
+    }
+    var csvContent = '\uFEFF' + csv.join('\r\n');
+    var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    var date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = 'NSE_FO_Scanner_Results_' + date + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+</script>
 </body>
 </html>

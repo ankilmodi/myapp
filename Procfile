@@ -1,1 +1,1 @@
-web: python main.py --demo --once
+web: python main.py

@@ -5,7 +5,7 @@
 
 angel:
   api_key: "YOUR_API_KEY_HERE"           # From Angel One developer portal
-  client_id: "YOUR_CLIENT_ID_HERE"       # Your Angel One login ID
+  client_id: "YOUR_CLIENT_ID_HERE"       # Your Angel One login ID (e.g., A123456)
   password: "YOUR_PASSWORD_HERE"         # Angel One login password
   totp_secret: "YOUR_TOTP_SECRET_HERE"   # TOTP secret (from API settings)
 
@@ -13,7 +13,7 @@ scanner:
   min_score: 50
   top_n: 20
   refresh_interval: 60
-  demo_mode: false
+  demo_mode: false                       # false = LIVE data with real auth
   candle_interval: "ONE_DAY"
   history_days: 100
 

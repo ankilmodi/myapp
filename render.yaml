@@ -5,7 +5,7 @@ services:
     region: singapore
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py --demo
+    startCommand: python main.py
     envVars:
       - key: PORT
         generateValue: true

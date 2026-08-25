@@ -6,6 +6,22 @@ buy-signal dashboard.
 
 ---
 
+## 🚀 Quick Start
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Configure your Angel One credentials in config/config.yaml
+
+# 3. Run the scanner
+python main.py
+
+# 4. View dashboard at output/dashboard.html
+```
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -66,50 +82,56 @@ cd c:\xampp\htdocs\myapp
 pip install -r requirements.txt
 ```
 
-### Step 3 - Get Angel One API Key
-1. Log in to Angel One Developer Portal: https://smartapi.angelbroking.com/
-2. Create a new app and copy your API Key
-3. Enable TOTP in your Angel One account settings
-4. Copy the TOTP Secret key shown during TOTP setup
+### Step 3 - Get Angel One API Credentials
+1. Log in to **Angel One Developer Portal**: https://smartapi.angelbroking.com/
+2. Create a new app and copy your **API Key**
+3. Enable **TOTP** in your Angel One account settings
+4. Copy the **TOTP Secret** key shown during TOTP setup (save it securely!)
 
-### Step 4 - Configure API Keys
-Edit config/config.yaml:
+### Step 4 - Configure Your Credentials
+1. Copy `config/config.yaml.example` to `config/config.yaml`
+2. Edit `config/config.yaml` with your real credentials:
+
 ```yaml
 angel:
-  api_key: "YOUR_API_KEY_HERE"
-  client_id: "YOUR_ANGEL_LOGIN_ID"
-  password: "YOUR_LOGIN_PASSWORD"
-  totp_secret: "YOUR_TOTP_SECRET_KEY"
+  api_key: "your_actual_api_key_here"       # From developer portal
+  client_id: "A123456"                       # Your Angel One login ID
+  password: "your_actual_password"           # Your login password
+  totp_secret: "JBSWY3DPEHPK3PXP..."        # Your TOTP secret key
 ```
 
-### Step 5 - Test in Demo Mode (No API Key Needed!)
-```bash
-python main.py --demo
-```
-
-### Step 6 - Run Live Scan
+### Step 5 - Run the Scanner
 ```bash
 python main.py
 ```
 
-### Step 7 - View Dashboard
-Open output/dashboard.html in your browser. It auto-refreshes every 60 seconds.
+The scanner will:
+- ✅ Authenticate with your credentials using TOTP
+- ✅ Fetch LIVE data from Angel One API
+- ✅ Scan all F&O stocks
+- ✅ Generate dashboard at `output/dashboard.html`
+
+### Step 6 - View Dashboard
+Open `output/dashboard.html` in your browser. It auto-refreshes every 60 seconds.
 
 ---
 
 ## Usage Examples
 
 ```bash
-# Demo mode - mock data, no API key
-python main.py --demo
+# Default: Live mode with real authentication
+python main.py
 
-# Run once and exit (live)
+# Run once and exit
 python main.py --once
 
-# Show top 10 picks
+# Show top 10 picks only
 python main.py --top 10
 
-# Live auto-refresh mode (every 60s)
+# Demo mode (mock data, no credentials needed)
+python main.py --demo
+
+# Live auto-refresh mode (scans every 60s)
 python main.py
 ```
 
@@ -134,11 +156,21 @@ alerts:
 
 | Problem | Solution |
 |---------|----------|
-| ImportError: smartapi | Run pip install smartapi-python |
-| Login fails | Check API key + TOTP secret in config.yaml |
-| Empty results | Try --demo flag first |
-| TOTP error | Re-scan QR code in Angel One app |
-| Rate limit errors | Increase delay_ms in data_fetcher.py |
+| ImportError: smartapi | Run `pip install smartapi-python` |
+| Login fails | Check API key, client_id, password, and TOTP secret in config.yaml |
+| TOTP error | Verify TOTP secret is correct, re-scan QR code if needed |
+| Empty results | Check internet connection and API key validity |
+| Rate limit errors | Increase `rate_delay` in data_fetcher.py |
+| Connection timeout | Check firewall/proxy settings |
+
+---
+
+## 🔐 Security Notes
+
+- **Never commit `config/config.yaml`** to version control (already in .gitignore)
+- Store credentials securely
+- Use environment variables for production deployments
+- TOTP secret is sensitive — treat it like a password
 
 ---
 

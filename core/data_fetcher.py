@@ -60,21 +60,32 @@ class DataFetcher:
             to_dt.strftime("%Y-%m-%d %H:%M"),
         )
 
-    def fetch_ohlcv_single(self, symbol: str, token: str) -> Optional[pd.DataFrame]:
+    def fetch_ohlcv_single(self, symbol: str, token: str, retries: int = 2) -> Optional[pd.DataFrame]:
         """
         Fetch historical OHLCV candles for one stock from Angel One SmartAPI.
         Returns a cleaned DataFrame or None if data is unavailable.
+        Includes retry logic for rate limit errors.
         """
         from_date, to_date = self._date_range()
 
-        raw = self.client.get_candles(
-            exchange=self.exchange,
-            symbol_token=str(token),
-            interval=self.interval,
-            from_date=from_date,
-            to_date=to_date,
-        )
+        for attempt in range(retries + 1):
+            raw = self.client.get_candles(
+                exchange=self.exchange,
+                symbol_token=str(token),
+                interval=self.interval,
+                from_date=from_date,
+                to_date=to_date,
+            )
 
+            if raw:
+                break
+            
+            # If rate limited and retries left, wait and try again
+            if attempt < retries:
+                wait_time = 2 * (attempt + 1)  # 2s, 4s progressive backoff
+                logger.debug(f"Rate limit hit for {symbol}, retry {attempt+1}/{retries} after {wait_time}s...")
+                time.sleep(wait_time)
+        
         if not raw:
             return None
 
@@ -97,7 +108,9 @@ class DataFetcher:
         try:
             resp = self.client.get_ltp(self.exchange, symbol + "-EQ", str(token))
             if resp.get("status") and resp.get("data"):
-                return resp["data"].get("ltp")
+                ltp = resp["data"].get("ltp")
+                logger.debug(f"LTP for {symbol}: ₹{ltp:.2f}")
+                return ltp
         except Exception as e:
             logger.warning(f"LTP error [{symbol}]: {e}")
         return None
@@ -147,18 +160,28 @@ class DataFetcher:
 
         # Step 3: Patch last close with live LTP for accurate current price
         logger.info("🔄 Patching live LTP into last candle close prices...")
+        patched_count = 0
         for s in stocks:
             sym = s["symbol"]
             tok = s["token"]
             if sym not in results:
                 continue
+            
+            old_close = results[sym]["close"].iloc[-1]
             ltp = self.fetch_ltp(sym, tok)
+            
             if ltp and ltp > 0:
                 results[sym].loc[results[sym].index[-1], "close"] = ltp
+                patched_count += 1
+                logger.debug(f"✓ {sym}: {old_close:.2f} → {ltp:.2f}")
+            else:
+                logger.warning(f"✗ {sym}: LTP fetch failed, using candle close {old_close:.2f}")
+            
             time.sleep(0.05)
 
         logger.success(
-            f"🟢 Angel One SmartAPI: {len(results)}/{total} stocks loaded with LIVE data"
+            f"🟢 Angel One SmartAPI: {len(results)}/{total} stocks loaded with LIVE data | "
+            f"LTP patched: {patched_count}/{len(results)}"
         )
         self._cache = results
         return results

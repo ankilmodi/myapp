@@ -34,68 +34,11 @@ except ImportError:
     logger.warning("smartapi-python not installed. Running in demo mode.")
 
 
-class MockSmartConnect:
-    """Mock SmartConnect for demo/testing without real credentials."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    def generateSession(self, client_id: str, password: str, totp: str) -> dict:
-        logger.info("[DEMO] Mock login successful.")
-        return {
-            "status": True,
-            "data": {
-                "jwtToken": "demo_jwt_token",
-                "refreshToken": "demo_refresh_token",
-                "feedToken": "demo_feed_token",
-            }
-        }
-
-    def getProfile(self, refresh_token: str) -> dict:
-        return {"status": True, "data": {"name": "Demo User", "clientcode": "DEMO001"}}
-
-    def ltpData(self, exchange: str, tradingsymbol: str, symboltoken: str) -> dict:
-        """Return mock LTP data."""
-        import random
-        price = round(random.uniform(100, 5000), 2)
-        return {
-            "status": True,
-            "data": {
-                "tradingsymbol": tradingsymbol,
-                "symboltoken": symboltoken,
-                "open": price * 0.99,
-                "high": price * 1.02,
-                "low": price * 0.97,
-                "close": price * 1.001,
-                "ltp": price,
-                "totaltradedvolume": random.randint(100000, 5000000),
-            }
-        }
-
-    def getCandleData(self, historyParam: dict) -> dict:
-        """Return mock historical candle data."""
-        import random
-        candles = []
-        base_price = random.uniform(100, 3000)
-        now = datetime.now()
-        for i in range(100, 0, -1):
-            dt = now - timedelta(days=i)
-            o = base_price * random.uniform(0.98, 1.02)
-            h = o * random.uniform(1.0, 1.05)
-            l = o * random.uniform(0.95, 1.0)
-            c = random.uniform(l, h)
-            v = random.randint(50000, 2000000)
-            base_price = c
-            candles.append([dt.strftime("%Y-%m-%dT%H:%M:%S+05:30"), o, h, l, c, v])
-        return {"status": True, "data": candles}
-
-    def terminateSession(self, client_id: str):
-        logger.info("[DEMO] Mock session terminated.")
 
 
 class AngelClient:
     """
-    Manages Angel One SmartAPI session.
+    Manages Angel One SmartAPI session - LIVE MODE ONLY.
 
     Parameters
     ----------
@@ -103,7 +46,7 @@ class AngelClient:
     client_id   : str  – Your Angel One login ID
     password    : str  – Your login password
     totp_secret : str  – TOTP secret (from developer settings)
-    demo_mode   : bool – Use mock data instead of live API
+    """
     """
 
     def __init__(
@@ -118,7 +61,7 @@ class AngelClient:
         self.client_id = client_id
         self.password = password
         self.totp_secret = totp_secret
-        self.demo_mode = demo_mode or not SMARTAPI_AVAILABLE
+        self.demo_mode = demo_mode
 
         self.obj: Optional[SmartConnect] = None
         self.auth_token: str = ""
@@ -131,37 +74,64 @@ class AngelClient:
     # Login / Session
     # ─────────────────────────────────────────────
     def login(self) -> bool:
-        """Authenticate with Angel One API. Returns True on success."""
+        """
+        Authenticate with Angel One API. Returns True on success.
+        
+        If demo_mode=True: Uses mock client with mock data.
+        If demo_mode=False: Uses real authentication with TOTP and live API.
+        """
         try:
+            # ★ DEMO MODE: Full mock (no real API calls) ★
             if self.demo_mode:
-                self.obj = MockSmartConnect(self.api_key)
-                totp = "000000"   # dummy TOTP for mock
-            else:
-                self.obj = SmartConnect(api_key=self.api_key)
-                if self.totp_secret and self.totp_secret.strip() and "YOUR_TOTP_SECRET" not in self.totp_secret:
-                    totp = pyotp.TOTP(self.totp_secret).now()
+                if not SMARTAPI_AVAILABLE:
+                    self.obj = MockSmartConnect(self.api_key)
                 else:
-                    # In cloud/non-interactive deployments, never block on input()
-                    is_interactive = sys.stdin.isatty() and not os.environ.get("PORT")
-                    if is_interactive:
-                        logger.warning("🔑 TOTP secret not configured. Requesting manual TOTP entry...")
-                        print("\n" + "=" * 60)
-                        print(f"👉 Enter the 6-digit TOTP code for account {self.client_id}")
-                        print("   (Check Google Authenticator or your AngelOne app)")
-                        print("=" * 60)
+                    self.obj = MockSmartConnect(self.api_key)
+                    logger.info("🎮 DEMO MODE: Using mock data (no real API calls)")
+                
+                # Set mock tokens
+                self.auth_token = "demo_jwt_token"
+                self.refresh_token = "demo_refresh_token"
+                self.feed_token = "demo_feed_token"
+                self.session_valid = True
+                self.last_error = ""
+                
+                logger.success(f"✅ Demo login successful [MOCK DATA MODE]")
+                return True
+            
+            # ★ LIVE MODE: Full authentication with TOTP and real API ★
+            if not SMARTAPI_AVAILABLE:
+                logger.error("SmartAPI library not available. Install with: pip install smartapi-python")
+                return False
+            
+            self.obj = SmartConnect(api_key=self.api_key)
+            
+            # Generate TOTP if secret is provided
+            if self.totp_secret and self.totp_secret.strip() and "YOUR_TOTP_SECRET" not in self.totp_secret:
+                totp = pyotp.TOTP(self.totp_secret).now()
+                logger.info(f"🔐 Generated TOTP from secret: {totp}")
+            else:
+                # In cloud/non-interactive deployments, never block on input()
+                is_interactive = sys.stdin.isatty() and not os.environ.get("PORT")
+                if is_interactive:
+                    logger.warning("🔑 TOTP secret not configured. Requesting manual TOTP entry...")
+                    print("\n" + "=" * 60)
+                    print(f"👉 Enter the 6-digit TOTP code for account {self.client_id}")
+                    print("   (Check Google Authenticator or your AngelOne app)")
+                    print("=" * 60)
+                    totp = input("Enter 6-digit TOTP: ").strip()
+                    while not (totp.isdigit() and len(totp) == 6):
+                        logger.error("Invalid TOTP format. It must be exactly 6 digits.")
                         totp = input("Enter 6-digit TOTP: ").strip()
-                        while not (totp.isdigit() and len(totp) == 6):
-                            logger.error("Invalid TOTP format. It must be exactly 6 digits.")
-                            totp = input("Enter 6-digit TOTP: ").strip()
-                    else:
-                        logger.warning(
-                            "⚠️  TOTP secret not set and running in non-interactive (cloud) mode. "
-                            "Switching to DEMO mode automatically."
-                        )
-                        self.demo_mode = True
-                        self.obj = MockSmartConnect(self.api_key)
-                        totp = "000000"
+                else:
+                    logger.error(
+                        "⚠️  TOTP secret not set and running in non-interactive (cloud) mode. "
+                        "Cannot proceed with authentication. Use --demo flag or set TOTP secret."
+                    )
+                    return False
 
+            # Attempt login
+            logger.info(f"🔐 Attempting login for {self.client_id}...")
             data = self.obj.generateSession(self.client_id, self.password, totp)
 
             if data["status"]:
@@ -170,19 +140,16 @@ class AngelClient:
                 self.feed_token = data["data"]["feedToken"]
                 self.session_valid = True
                 self.last_error = ""
-                logger.success(
-                    f"✅ Logged in as {self.client_id} "
-                    f"{'[DEMO]' if self.demo_mode else '[LIVE]'}"
-                )
+                logger.success(f"✅ Logged in as {self.client_id} [LIVE MODE - AUTHENTICATED]")
                 return True
             else:
                 self.last_error = f"{data.get('message', 'Login failed')} (Code: {data.get('errorcode', '')})"
-                logger.error(f"Login failed: {data}")
+                logger.error(f"❌ Login failed: {data}")
                 return False
 
         except Exception as e:
             self.last_error = str(e)
-            logger.error(f"Login exception: {e}")
+            logger.error(f"❌ Login exception: {e}")
             return False
 
     def logout(self):
@@ -246,6 +213,17 @@ class AngelClient:
 
     def get_profile(self) -> dict:
         """Fetch account profile information."""
+        if self.demo_mode:
+            # Return mock profile for demo mode
+            return {
+                "status": True,
+                "data": {
+                    "name": f"Mock User ({self.client_id})",
+                    "clientcode": self.client_id,
+                    "email": "mock@example.com"
+                }
+            }
+        
         self.ensure_session()
         try:
             return self.obj.getProfile(self.refresh_token)

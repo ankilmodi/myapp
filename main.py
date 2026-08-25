@@ -146,8 +146,10 @@ def run_scan(client: AngelClient, config: dict, top_n: int = 20):
         client=client,
         interval=cfg.get("candle_interval", "ONE_DAY"),
         history_days=cfg.get("history_days", 100),
+        rate_delay=0.3,  # 0.3 seconds between requests
+        max_stocks=top_n,  # Fetch only the number of stocks we need
     )
-    ohlcv_data = fetcher.fetch_all_ohlcv(delay_ms=300)
+    ohlcv_data = fetcher.fetch_all_ohlcv()  # No parameters needed
 
     if not ohlcv_data:
         logger.error("No data fetched. Check API connection.")
@@ -199,8 +201,7 @@ def run_scan(client: AngelClient, config: dict, top_n: int = 20):
 def main():
     print(BANNER)
 
-    parser = argparse.ArgumentParser(description="Angel One F&O Best Buy Scanner")
-    parser.add_argument("--demo",  action="store_true", help="Run in demo/mock mode (no real API)")
+    parser = argparse.ArgumentParser(description="Angel One F&O Best Buy Scanner - LIVE MODE ONLY")
     parser.add_argument("--once",  action="store_true", help="Run once and exit")
     parser.add_argument("--top",   type=int, default=20,  help="Number of top picks to display")
     parser.add_argument("--config",type=str, default="config/config.yaml", help="Path to config file")
@@ -231,33 +232,21 @@ def main():
         except Exception as e:
             logger.error(f"Failed to start web server on port {port}: {e}")
 
-    # ── Demo mode override ─────────────────────────────────
-    demo_mode = args.demo or scanner_cfg.get("demo_mode", False)
-    if demo_mode:
-        logger.info("🎮 Running in DEMO MODE (mock data, no API call)")
-
-    # ★ STEP 2: Create client and login
+    # ── Demo mode override (default: LIVE mode with real authentication) ────────────────────────────
+    # ★ STEP 2: Create client and login with LIVE Angel One API ONLY
+    logger.info("🔐 Running in LIVE MODE with real Angel One authentication...")
+    
     client = AngelClient(
-        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", "DEMO"),
-        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", "DEMO001"),
-        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", "demo123"),
-        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", "JBSWY3DPEHPK3PXP"),
-        demo_mode=demo_mode,
+        api_key=os.environ.get("ANGEL_API_KEY") or angel_cfg.get("api_key", ""),
+        client_id=os.environ.get("ANGEL_CLIENT_ID") or angel_cfg.get("client_id", ""),
+        password=os.environ.get("ANGEL_PASSWORD") or angel_cfg.get("password", ""),
+        totp_secret=os.environ.get("ANGEL_TOTP_SECRET") or angel_cfg.get("totp_secret", ""),
     )
 
     if not client.login():
-        if port:
-            # In cloud mode — don't exit, fall back to demo so the web server keeps running
-            logger.warning("⚠️  Login failed in cloud mode. Falling back to DEMO mode.")
-            client = AngelClient(
-                api_key="DEMO", client_id="DEMO001",
-                password="demo123", totp_secret="JBSWY3DPEHPK3PXP",
-                demo_mode=True,
-            )
-            client.login()
-        else:
-            logger.error("Login failed. Use --demo flag for demo mode.")
-            sys.exit(1)
+        logger.error("❌ Login failed. Please check your credentials in config/config.yaml")
+        logger.error("    Ensure API key, client ID, password, and TOTP secret are correct.")
+        sys.exit(1)
 
     profile = client.get_profile()
     if profile.get("status"):
