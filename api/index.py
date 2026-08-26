@@ -326,14 +326,14 @@ def get_html(stock_data):
             color: #e5e7eb;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             min-height: 100vh;
-            padding: 20px;
+            padding: 12px;
         }}
         .container {{
             max-width: 1400px;
             margin: 0 auto;
         }}
         h1 {{
-            font-size: 2.5rem;
+            font-size: 1.8rem;
             background: linear-gradient(135deg, #3b82f6, #10b981);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -342,8 +342,8 @@ def get_html(stock_data):
         }}
         .subtitle {{
             color: #9ca3af;
-            font-size: 1.1rem;
-            margin-bottom: 24px;
+            font-size: 0.9rem;
+            margin-bottom: 16px;
         }}
         .status {{
             background: {'#059669' if all_configured else '#dc2626'};
@@ -388,28 +388,98 @@ def get_html(stock_data):
             width: 100%;
             background: rgba(17, 24, 39, 0.95);
             border-radius: 12px;
-            overflow: hidden;
-            margin: 24px 0;
+            overflow-x: auto;
+            margin: 16px 0;
             border-collapse: collapse;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            display: block;
         }}
         thead {{
             background: linear-gradient(135deg, #1e293b, #334155);
         }}
+        tbody {{
+            display: block;
+            overflow-x: auto;
+        }}
+        tr {{
+            display: table;
+            width: 100%;
+            table-layout: fixed;
+        }}
         th, td {{
-            padding: 16px 12px;
+            padding: 10px 6px;
             text-align: center;
             border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+            font-size: 0.75rem;
+            min-width: 80px;
         }}
         th {{
             color: #60a5fa;
             font-weight: 700;
             text-transform: uppercase;
-            font-size: 0.8rem;
-            letter-spacing: 0.05em;
+            font-size: 0.65rem;
+            letter-spacing: 0.03em;
         }}
         tr:hover {{
             background: rgba(59, 130, 246, 0.1);
+        }}
+        
+        /* Mobile Styles */
+        @media (max-width: 768px) {{
+            body {{
+                padding: 8px;
+            }}
+            h1 {{
+                font-size: 1.4rem;
+            }}
+            .subtitle {{
+                font-size: 0.75rem;
+            }}
+            .status {{
+                padding: 8px 16px;
+                font-size: 0.85rem;
+            }}
+            th, td {{
+                padding: 8px 4px;
+                font-size: 0.7rem;
+                min-width: 70px;
+            }}
+            th {{
+                font-size: 0.6rem;
+            }}
+            .success-box, .error-box, .info-box {{
+                padding: 12px;
+                font-size: 0.8rem;
+            }}
+            .refresh-note {{
+                padding: 8px;
+                font-size: 0.75rem;
+            }}
+            .legend {{
+                flex-direction: column;
+                gap: 8px;
+            }}
+            .legend-item {{
+                font-size: 0.75rem;
+            }}
+        }}
+        
+        /* Small Mobile */
+        @media (max-width: 480px) {{
+            h1 {{
+                font-size: 1.2rem;
+            }}
+            .subtitle {{
+                font-size: 0.7rem;
+            }}
+            th, td {{
+                padding: 6px 3px;
+                font-size: 0.65rem;
+                min-width: 60px;
+            }}
+            th {{
+                font-size: 0.55rem;
+            }}
         }}
         .timestamp {{
             color: #64748b;
