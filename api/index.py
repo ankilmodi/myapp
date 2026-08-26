@@ -205,10 +205,24 @@ def get_live_stock_data():
                     action = get_action_verdict(rsi, smart_signal)
                     entry_price, stop_loss, target1, target2, target3 = calculate_targets(ltp)
                     
+                    # Calculate shares and profit for ₹10,000 budget (₹2,000 per stock)
+                    investment_per_stock = 2000
+                    shares_to_buy = int(investment_per_stock / entry_price)
+                    actual_investment = shares_to_buy * entry_price
+                    
+                    # Expected profit at Target 2 (3% - most realistic target)
+                    profit_per_share = target2 - entry_price
+                    total_profit = round(profit_per_share * shares_to_buy, 2)
+                    profit_percentage = round((profit_per_share / entry_price) * 100, 2)
+                    
                     stocks_data.append({
                         "symbol": stock["symbol"],
                         "ltp": ltp,
                         "entry_price": entry_price,
+                        "shares_to_buy": shares_to_buy,
+                        "investment": round(actual_investment, 2),
+                        "expected_profit": total_profit,
+                        "profit_percent": profit_percentage,
                         "rsi": rsi,
                         "smart_signal": smart_signal,
                         "action": action,
@@ -324,13 +338,16 @@ def get_html(stock_data):
                 <td style="font-weight:700; color:#60a5fa; font-size:1.1em;">{stock['symbol']}</td>
                 <td style="font-weight:600; color:#e5e7eb; font-size:1.1em;">₹{stock['ltp']:.2f}</td>
                 <td style="font-weight:600; color:#10b981; font-size:1.05em;">₹{stock['entry_price']:.2f}</td>
+                <td style="font-weight:700; color:#fbbf24; font-size:1em;">{stock['shares_to_buy']}</td>
+                <td style="font-weight:600; color:#9ca3af; font-size:0.95em;">₹{stock['investment']:.0f}</td>
+                <td style="font-weight:700; color:#34d399; font-size:1.05em;">₹{stock['expected_profit']:.2f}</td>
                 <td style="font-weight:600; color:{rsi_color};">{stock['rsi']:.2f}</td>
-                <td style="color:#9ca3af; font-size:0.9em;">{stock['smart_signal']}</td>
+                <td style="color:#9ca3af; font-size:0.85em;">{stock['smart_signal']}</td>
                 <td style="font-weight:600; color:{action_color};">{stock['action']}</td>
-                <td style="color:#ef4444; font-size:0.95em;">₹{stock['stop_loss']:.2f}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target1']:.2f}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target2']:.2f}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target3']:.2f}</td>
+                <td style="color:#ef4444; font-size:0.9em;">₹{stock['stop_loss']:.2f}</td>
+                <td style="color:#34d399; font-size:0.9em;">₹{stock['target1']:.2f}</td>
+                <td style="color:#34d399; font-size:0.9em;">₹{stock['target2']:.2f}</td>
+                <td style="color:#34d399; font-size:0.9em;">₹{stock['target3']:.2f}</td>
             </tr>
             """
             
@@ -340,6 +357,20 @@ def get_html(stock_data):
                 <div class="card-header">
                     <h3>{stock['symbol']}</h3>
                     <span class="action-badge" style="background:{action_color};">{stock['action']}</span>
+                </div>
+                <div class="budget-box">
+                    <div class="budget-item">
+                        <label>📦 Buy Qty</label>
+                        <span class="qty">{stock['shares_to_buy']} shares</span>
+                    </div>
+                    <div class="budget-item">
+                        <label>💵 Investment</label>
+                        <span class="invest">₹{stock['investment']:.0f}</span>
+                    </div>
+                    <div class="budget-item highlight-profit">
+                        <label>💰 Expected Profit</label>
+                        <span class="profit">₹{stock['expected_profit']:.2f}</span>
+                    </div>
                 </div>
                 <div class="price-row">
                     <div class="price-box">
@@ -381,7 +412,7 @@ def get_html(stock_data):
             </div>
             """
     else:
-        stock_rows = '<tr><td colspan="10" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
+        stock_rows = '<tr><td colspan="13" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
         mobile_cards = '<div class="mobile-card"><p style="text-align:center; color:#ef4444; padding:24px;">No picks available</p></div>'
     
     # Status message
@@ -393,6 +424,11 @@ def get_html(stock_data):
     elif stock_data.get("stocks"):
         day_start = stock_data.get("day_start", "Today")
         locked_note = f"<br><small>🔒 These 5 stocks LOCKED since {day_start} 9:15 AM - Same stocks for full trading day</small>" if stock_data.get("locked_symbols") else ""
+        
+        # Calculate total investment and expected profit
+        total_investment = sum(s.get('investment', 0) for s in stock_data['stocks'])
+        total_expected_profit = sum(s.get('expected_profit', 0) for s in stock_data['stocks'])
+        
         status_msg = f'''<div class="success-box">
             ✅ LIVE Full-Day Profit Picks from Angel One API<br>
             Account: {stock_data.get("account", "N/A")} | 
@@ -400,6 +436,20 @@ def get_html(stock_data):
             Best 5 Picks: {stock_data.get("stocks_count", 0)} stocks analyzed<br>
             <small>Ranked by: RSI + Smart Money + Profit Potential</small>
             {locked_note}
+        </div>
+        <div class="budget-summary">
+            <div class="summary-item">
+                <label>💵 Total Investment (5 stocks)</label>
+                <span class="value">₹{total_investment:.0f}</span>
+            </div>
+            <div class="summary-item highlight">
+                <label>💰 Total Expected Profit</label>
+                <span class="value profit">₹{total_expected_profit:.2f}</span>
+            </div>
+            <div class="summary-item">
+                <label>📊 Expected Return</label>
+                <span class="value">{(total_expected_profit/total_investment*100):.2f}%</span>
+            </div>
         </div>'''
     else:
         status_msg = '<div class="info-box">⏳ Loading intraday picks...</div>'
@@ -475,6 +525,50 @@ def get_html(stock_data):
             border-radius: 8px;
             margin: 16px 0;
             color: #60a5fa;
+        }}
+        .budget-summary {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin: 16px 0;
+            background: rgba(17, 24, 39, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            border: 2px solid #1e40af;
+        }}
+        .summary-item {{
+            text-align: center;
+        }}
+        .summary-item label {{
+            display: block;
+            color: #9ca3af;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }}
+        .summary-item .value {{
+            display: block;
+            color: #60a5fa;
+            font-size: 1.8rem;
+            font-weight: 700;
+        }}
+        .summary-item .value.profit {{
+            color: #34d399;
+            font-size: 2rem;
+        }}
+        .summary-item.highlight {{
+            background: rgba(16, 185, 129, 0.1);
+            border-radius: 8px;
+            padding: 8px;
+        }}
+        @media (max-width: 768px) {{
+            .budget-summary {{
+                grid-template-columns: 1fr;
+                gap: 12px;
+                padding: 16px;
+            }}
+            .summary-item .value {{
+                font-size: 1.5rem;
+            }}
         }}
         table {{
             width: 100%;
@@ -632,6 +726,50 @@ def get_html(stock_data):
             font-size: 0.7rem;
         }}
         
+        /* Budget Box for Mobile */
+        .budget-box {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 12px;
+            border: 2px solid #1e40af;
+        }}
+        .budget-item {{
+            text-align: center;
+        }}
+        .budget-item label {{
+            display: block;
+            color: #9ca3af;
+            font-size: 0.65rem;
+            margin-bottom: 4px;
+        }}
+        .budget-item .qty {{
+            display: block;
+            color: #fbbf24;
+            font-size: 1rem;
+            font-weight: 700;
+        }}
+        .budget-item .invest {{
+            display: block;
+            color: #60a5fa;
+            font-size: 1rem;
+            font-weight: 700;
+        }}
+        .budget-item .profit {{
+            display: block;
+            color: #34d399;
+            font-size: 1.1rem;
+            font-weight: 700;
+        }}
+        .budget-item.highlight-profit {{
+            background: rgba(16, 185, 129, 0.1);
+            border-radius: 8px;
+            padding: 4px;
+        }}
+        
         /* Mobile Styles */
         @media (max-width: 768px) {{
             body {{
@@ -760,9 +898,12 @@ def get_html(stock_data):
                     <th>Stock Ticker</th>
                     <th>Current Price (₹)</th>
                     <th>Entry Price (₹)</th>
+                    <th>📦 Buy Qty</th>
+                    <th>💵 Investment</th>
+                    <th>💰 Expected Profit</th>
                     <th>RSI</th>
-                    <th>Smart Money Signal</th>
-                    <th>Action Verdict</th>
+                    <th>Smart Money</th>
+                    <th>Action</th>
                     <th>Stop Loss</th>
                     <th>Target 1</th>
                     <th>Target 2</th>
