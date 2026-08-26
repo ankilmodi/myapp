@@ -131,13 +131,25 @@ def get_live_stock_data():
         if not data.get("status"):
             return {"error": f"Login failed: {data.get('message', 'Unknown error')}", "stocks": []}
         
-        # Top 5 liquid F&O stocks for intraday
+        # SmallCap/MidCap F&O stocks (lower priced, higher volume potential)
         stock_tokens = [
-            {"symbol": "RELIANCE", "token": "2885", "exchange": "NSE"},
-            {"symbol": "TCS", "token": "11536", "exchange": "NSE"},
-            {"symbol": "HDFCBANK", "token": "1333", "exchange": "NSE"},
-            {"symbol": "INFY", "token": "1594", "exchange": "NSE"},
-            {"symbol": "ICICIBANK", "token": "4963", "exchange": "NSE"},
+            # Banking & Finance (Mid/Small Cap)
+            {"symbol": "SBIN", "token": "3045", "exchange": "NSE"},           # State Bank ~600-700
+            {"symbol": "AXISBANK", "token": "5900", "exchange": "NSE"},       # Axis Bank ~1000-1200
+            {"symbol": "BANKBARODA", "token": "4668", "exchange": "NSE"},     # Bank of Baroda ~200-250
+            
+            # Auto Sector (Mid/Small Cap)
+            {"symbol": "TATAMOTORS", "token": "3456", "exchange": "NSE"},     # Tata Motors ~800-1000
+            {"symbol": "ASHOKLEY", "token": "212", "exchange": "NSE"},        # Ashok Leyland ~150-200
+            
+            # Infrastructure & PSU (Small Cap)
+            {"symbol": "SAIL", "token": "3926", "exchange": "NSE"},           # SAIL ~100-150
+            {"symbol": "POWERGRID", "token": "14977", "exchange": "NSE"},     # Power Grid ~250-300
+            {"symbol": "NTPC", "token": "11630", "exchange": "NSE"},          # NTPC ~300-350
+            
+            # Telecom & Energy (Mid Cap)
+            {"symbol": "BHARTIARTL", "token": "10604", "exchange": "NSE"},    # Bharti Airtel ~1300-1500
+            {"symbol": "COALINDIA", "token": "5215", "exchange": "NSE"},      # Coal India ~400-450
         ]
         
         stocks_data = []
