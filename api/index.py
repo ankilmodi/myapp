@@ -90,12 +90,15 @@ def get_action_verdict(rsi, smart_signal):
             return "HOLD"
 
 def calculate_targets(ltp):
-    """Calculate target prices"""
+    """Calculate target prices and entry zone"""
+    # Entry zone: slightly below current price for better entry
+    entry_price = round(ltp * 0.995, 2)  # 0.5% below LTP (wait for small dip)
+    
     target1 = round(ltp * 1.02, 2)  # 2% gain
     target2 = round(ltp * 1.03, 2)  # 3% gain
     target3 = round(ltp * 1.05, 2)  # 5% gain
     stop_loss = round(ltp * 0.98, 2)  # 2% loss
-    return stop_loss, target1, target2, target3
+    return entry_price, stop_loss, target1, target2, target3
 
 def get_live_stock_data():
     """Fetch live stock data from Angel One API"""
@@ -184,11 +187,12 @@ def get_live_stock_data():
                     rsi = calculate_rsi(prices) if prices else 50.0
                     smart_signal = get_smart_money_signal(rsi)
                     action = get_action_verdict(rsi, smart_signal)
-                    stop_loss, target1, target2, target3 = calculate_targets(ltp)
+                    entry_price, stop_loss, target1, target2, target3 = calculate_targets(ltp)
                     
                     stocks_data.append({
                         "symbol": stock["symbol"],
                         "ltp": ltp,
+                        "entry_price": entry_price,
                         "rsi": rsi,
                         "smart_signal": smart_signal,
                         "action": action,
@@ -250,6 +254,7 @@ def get_html(stock_data):
             <tr>
                 <td style="font-weight:700; color:#60a5fa; font-size:1.1em;">{stock['symbol']}</td>
                 <td style="font-weight:600; color:#e5e7eb; font-size:1.1em;">₹{stock['ltp']:.2f}</td>
+                <td style="font-weight:600; color:#10b981; font-size:1.05em;">₹{stock['entry_price']:.2f}</td>
                 <td style="font-weight:600; color:{rsi_color};">{stock['rsi']:.2f}</td>
                 <td style="color:#9ca3af; font-size:0.9em;">{stock['smart_signal']}</td>
                 <td style="font-weight:600; color:{action_color};">{stock['action']}</td>
@@ -260,7 +265,7 @@ def get_html(stock_data):
             </tr>
             """
     else:
-        stock_rows = '<tr><td colspan="9" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
+        stock_rows = '<tr><td colspan="10" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
     
     # Status message
     if stock_data.get("error"):
@@ -448,6 +453,7 @@ def get_html(stock_data):
                 <tr>
                     <th>Stock Ticker</th>
                     <th>Current Price (₹)</th>
+                    <th>Entry Price (₹)</th>
                     <th>RSI</th>
                     <th>Smart Money Signal</th>
                     <th>Action Verdict</th>
