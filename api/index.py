@@ -36,6 +36,13 @@ _cache = {
     "ttl": 30  # 30 seconds cache
 }
 
+# Daily stock list (fixed for entire trading day)
+_daily_stocks = {
+    "symbols": [],
+    "date": None,
+    "locked": False
+}
+
 def calculate_rsi(prices, period=14):
     """Simple RSI calculation"""
     if len(prices) < period:
@@ -101,15 +108,24 @@ def calculate_targets(ltp):
     return entry_price, stop_loss, target1, target2, target3
 
 def get_live_stock_data():
-    """Fetch live stock data from Angel One API"""
+    """Fetch live stock data from Angel One API - Fixed 5 stocks for full trading day"""
     
     # Check imports first
     if not IMPORTS_OK:
         error_msg = "Required libraries not available: " + ", ".join(import_errors)
         return {"error": error_msg, "stocks": [], "import_errors": import_errors}
     
-    # Check cache
+    # Check if we need to refresh the daily stock list
     now = datetime.now()
+    today_date = now.strftime("%Y-%m-%d")
+    
+    # If it's a new day OR daily stocks not selected yet, select fresh top 5
+    if _daily_stocks["date"] != today_date or not _daily_stocks["symbols"]:
+        _daily_stocks["date"] = today_date
+        _daily_stocks["symbols"] = []  # Will be populated below
+        _daily_stocks["locked"] = False
+    
+    # Check cache for live price updates (30 seconds)
     if _cache["data"] and _cache["timestamp"]:
         age = (now - _cache["timestamp"]).total_seconds()
         if age < _cache["ttl"]:
@@ -237,14 +253,36 @@ def get_live_stock_data():
         # Sort by profit score (best opportunities first)
         stocks_data.sort(key=lambda x: x['profit_score'], reverse=True)
         
+        # Lock the same 5 stocks for entire day if not already locked
+        if not _daily_stocks["locked"] or not _daily_stocks["symbols"]:
+            # First time today - select top 5 and lock them
+            _daily_stocks["symbols"] = [s['symbol'] for s in stocks_data[:5]]
+            _daily_stocks["locked"] = True
+            top_5_stocks = stocks_data[:5]
+        else:
+            # Use locked symbols from morning, but update their live prices
+            top_5_stocks = []
+            for locked_symbol in _daily_stocks["symbols"]:
+                # Find this symbol in current data
+                stock_found = next((s for s in stocks_data if s['symbol'] == locked_symbol), None)
+                if stock_found:
+                    top_5_stocks.append(stock_found)
+            
+            # If somehow we have less than 5, fill with best remaining
+            if len(top_5_stocks) < 5:
+                remaining = [s for s in stocks_data if s['symbol'] not in _daily_stocks["symbols"]]
+                top_5_stocks.extend(remaining[:5 - len(top_5_stocks)])
+        
         result = {
             "account": client_id,
             "api_key": api_key[:4] + "***",
             "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             "stocks_count": len(stocks_data),
-            "stocks": stocks_data[:5],  # Top 5 best profit potential
+            "stocks": top_5_stocks,
             "status": "success",
-            "note": "Top 5 stocks with best full-day profit potential"
+            "note": "Same 5 stocks locked for full trading day (9:15 AM - 3:30 PM)",
+            "locked_symbols": _daily_stocks["symbols"],
+            "day_start": _daily_stocks["date"]
         }
         
         # Update cache
@@ -353,12 +391,15 @@ def get_html(stock_data):
             error_detail += "<br><small>Import errors: " + "<br>".join(stock_data["import_errors"]) + "</small>"
         status_msg = f'<div class="error-box">❌ {error_detail}</div>'
     elif stock_data.get("stocks"):
+        day_start = stock_data.get("day_start", "Today")
+        locked_note = f"<br><small>🔒 These 5 stocks LOCKED since {day_start} 9:15 AM - Same stocks for full trading day</small>" if stock_data.get("locked_symbols") else ""
         status_msg = f'''<div class="success-box">
             ✅ LIVE Full-Day Profit Picks from Angel One API<br>
             Account: {stock_data.get("account", "N/A")} | 
             API Key: {stock_data.get("api_key", "N/A")} | 
             Best 5 Picks: {stock_data.get("stocks_count", 0)} stocks analyzed<br>
             <small>Ranked by: RSI + Smart Money + Profit Potential</small>
+            {locked_note}
         </div>'''
     else:
         status_msg = '<div class="info-box">⏳ Loading intraday picks...</div>'
@@ -709,7 +750,7 @@ def get_html(stock_data):
         </div>
 
         <div class="refresh-note">
-            🔄 Auto-refresh: 30 seconds | Showing ONLY top 5 stocks with BEST full-day profit potential
+            🔄 Auto-refresh: 30 seconds | 🔒 SAME 5 stocks locked for FULL trading day (9:15 AM to 3:30 PM)
         </div>
 
         <!-- Desktop Table -->
