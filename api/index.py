@@ -270,14 +270,17 @@ def get_html(stock_data):
     
     all_configured = all([has_api_key, has_client_id, has_password, has_totp])
     
-    # Stock table HTML
+    # Stock rows HTML - Desktop table and Mobile cards
     stock_rows = ""
+    mobile_cards = ""
+    
     if stock_data.get("stocks"):
         for idx, stock in enumerate(stock_data["stocks"], 1):
             # Color coding for action
             action_color = "#34d399" if "BUY" in stock['action'] else "#fbbf24" if "HOLD" in stock['action'] else "#f87171"
             rsi_color = "#34d399" if 40 <= stock['rsi'] <= 70 else "#fbbf24" if stock['rsi'] > 70 else "#f87171"
             
+            # Desktop table row
             stock_rows += f"""
             <tr>
                 <td style="font-weight:700; color:#60a5fa; font-size:1.1em;">{stock['symbol']}</td>
@@ -286,14 +289,62 @@ def get_html(stock_data):
                 <td style="font-weight:600; color:{rsi_color};">{stock['rsi']:.2f}</td>
                 <td style="color:#9ca3af; font-size:0.9em;">{stock['smart_signal']}</td>
                 <td style="font-weight:600; color:{action_color};">{stock['action']}</td>
-                <td style="color:#ef4444; font-size:0.95em;">₹{stock['stop_loss']}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target1']}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target2']}</td>
-                <td style="color:#34d399; font-size:0.95em;">₹{stock['target3']}</td>
+                <td style="color:#ef4444; font-size:0.95em;">₹{stock['stop_loss']:.2f}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target1']:.2f}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target2']:.2f}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target3']:.2f}</td>
             </tr>
+            """
+            
+            # Mobile card layout
+            mobile_cards += f"""
+            <div class="mobile-card">
+                <div class="card-header">
+                    <h3>{stock['symbol']}</h3>
+                    <span class="action-badge" style="background:{action_color};">{stock['action']}</span>
+                </div>
+                <div class="price-row">
+                    <div class="price-box">
+                        <label>Current Price</label>
+                        <span class="price">₹{stock['ltp']:.2f}</span>
+                    </div>
+                    <div class="price-box highlight">
+                        <label>💰 Entry Price</label>
+                        <span class="price">₹{stock['entry_price']:.2f}</span>
+                    </div>
+                </div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <label>RSI</label>
+                        <span style="color:{rsi_color}; font-weight:600;">{stock['rsi']:.2f}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>🛑 Stop Loss</label>
+                        <span style="color:#ef4444; font-weight:600;">₹{stock['stop_loss']:.2f}</span>
+                    </div>
+                </div>
+                <div class="targets-row">
+                    <div class="target-box">
+                        <label>🎯 T1 (2%)</label>
+                        <span>₹{stock['target1']:.2f}</span>
+                    </div>
+                    <div class="target-box">
+                        <label>🎯 T2 (3%)</label>
+                        <span>₹{stock['target2']:.2f}</span>
+                    </div>
+                    <div class="target-box">
+                        <label>🎯 T3 (5%)</label>
+                        <span>₹{stock['target3']:.2f}</span>
+                    </div>
+                </div>
+                <div class="signal-box">
+                    <small>📊 {stock['smart_signal']}</small>
+                </div>
+            </div>
             """
     else:
         stock_rows = '<tr><td colspan="10" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
+        mobile_cards = '<div class="mobile-card"><p style="text-align:center; color:#ef4444; padding:24px;">No picks available</p></div>'
     
     # Status message
     if stock_data.get("error"):
@@ -424,6 +475,122 @@ def get_html(stock_data):
             background: rgba(59, 130, 246, 0.1);
         }}
         
+        /* Mobile Cards */
+        .mobile-cards {{
+            display: none;
+        }}
+        .mobile-card {{
+            background: rgba(17, 24, 39, 0.95);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }}
+        .card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }}
+        .card-header h3 {{
+            color: #60a5fa;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0;
+        }}
+        .action-badge {{
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: white;
+        }}
+        .price-row {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }}
+        .price-box {{
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 12px;
+            text-align: center;
+        }}
+        .price-box.highlight {{
+            background: linear-gradient(135deg, #065f46, #064e3b);
+            border: 2px solid #10b981;
+        }}
+        .price-box label {{
+            display: block;
+            color: #9ca3af;
+            font-size: 0.75rem;
+            margin-bottom: 4px;
+        }}
+        .price-box .price {{
+            display: block;
+            color: #e5e7eb;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }}
+        .info-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }}
+        .info-item {{
+            background: #1e293b;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .info-item label {{
+            display: block;
+            color: #9ca3af;
+            font-size: 0.7rem;
+            margin-bottom: 4px;
+        }}
+        .info-item span {{
+            font-size: 1rem;
+        }}
+        .targets-row {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }}
+        .target-box {{
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid #10b981;
+            padding: 8px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .target-box label {{
+            display: block;
+            color: #10b981;
+            font-size: 0.65rem;
+            margin-bottom: 2px;
+        }}
+        .target-box span {{
+            display: block;
+            color: #34d399;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }}
+        .signal-box {{
+            background: #1e293b;
+            padding: 8px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .signal-box small {{
+            color: #9ca3af;
+            font-size: 0.7rem;
+        }}
+        
         /* Mobile Styles */
         @media (max-width: 768px) {{
             body {{
@@ -439,14 +606,17 @@ def get_html(stock_data):
                 padding: 8px 16px;
                 font-size: 0.85rem;
             }}
-            th, td {{
-                padding: 8px 4px;
-                font-size: 0.7rem;
-                min-width: 70px;
+            
+            /* Hide table on mobile */
+            .desktop-table {{
+                display: none;
             }}
-            th {{
-                font-size: 0.6rem;
+            
+            /* Show cards on mobile */
+            .mobile-cards {{
+                display: block;
             }}
+            
             .success-box, .error-box, .info-box {{
                 padding: 12px;
                 font-size: 0.8rem;
@@ -472,13 +642,8 @@ def get_html(stock_data):
             .subtitle {{
                 font-size: 0.7rem;
             }}
-            th, td {{
-                padding: 6px 3px;
-                font-size: 0.65rem;
-                min-width: 60px;
-            }}
-            th {{
-                font-size: 0.55rem;
+            .card-header h3 {{
+                font-size: 1.3rem;
             }}
         }}
         .timestamp {{
@@ -547,7 +712,8 @@ def get_html(stock_data):
             🔄 Auto-refresh: 30 seconds | Showing ONLY top 5 stocks with BEST full-day profit potential
         </div>
 
-        <table>
+        <!-- Desktop Table -->
+        <table class="desktop-table">
             <thead>
                 <tr>
                     <th>Stock Ticker</th>
@@ -566,6 +732,11 @@ def get_html(stock_data):
                 {stock_rows}
             </tbody>
         </table>
+
+        <!-- Mobile Cards -->
+        <div class="mobile-cards">
+            {mobile_cards}
+        </div>
 
         <p class="timestamp">
             Last updated: {now}<br>
