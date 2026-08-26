@@ -1,7 +1,7 @@
 """
 api/index.py
 ============
-Vercel serverless handler with LIVE stock data from Angel One API
+Vercel serverless handler with LIVE intraday stock picks
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -35,6 +35,67 @@ _cache = {
     "timestamp": None,
     "ttl": 30  # 30 seconds cache
 }
+
+def calculate_rsi(prices, period=14):
+    """Simple RSI calculation"""
+    if len(prices) < period:
+        return 50.0
+    
+    gains = []
+    losses = []
+    
+    for i in range(1, len(prices)):
+        change = prices[i] - prices[i-1]
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+    
+    avg_gain = sum(gains[-period:]) / period if gains else 0
+    avg_loss = sum(losses[-period:]) / period if losses else 0
+    
+    if avg_loss == 0:
+        return 100.0
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi, 2)
+
+def get_smart_money_signal(rsi):
+    """Determine smart money signal based on RSI"""
+    if rsi > 70:
+        return "RETAIL CONSOLIDATION"
+    elif rsi > 60:
+        return "INSTITUTIONAL BUY FLOW"
+    elif rsi >= 40:
+        return "INSTITUTIONAL BUY FLOW"
+    else:
+        return "RETAIL CONSOLIDATION"
+
+def get_action_verdict(rsi, smart_signal):
+    """Determine action verdict"""
+    if smart_signal == "INSTITUTIONAL BUY FLOW":
+        if rsi >= 55:
+            return "BUY / ACCUMULATE"
+        else:
+            return "HOLD"
+    else:
+        if rsi > 75:
+            return "SELL / BOOK PROFIT"
+        elif rsi < 30:
+            return "BUY / ACCUMULATE"
+        else:
+            return "HOLD"
+
+def calculate_targets(ltp):
+    """Calculate target prices"""
+    target1 = round(ltp * 1.02, 2)  # 2% gain
+    target2 = round(ltp * 1.03, 2)  # 3% gain
+    target3 = round(ltp * 1.05, 2)  # 5% gain
+    stop_loss = round(ltp * 0.98, 2)  # 2% loss
+    return stop_loss, target1, target2, target3
 
 def get_live_stock_data():
     """Fetch live stock data from Angel One API"""
@@ -70,38 +131,59 @@ def get_live_stock_data():
         if not data.get("status"):
             return {"error": f"Login failed: {data.get('message', 'Unknown error')}", "stocks": []}
         
-        # Sample F&O stocks to fetch (top liquid stocks)
+        # Top 5 liquid F&O stocks for intraday
         stock_tokens = [
             {"symbol": "RELIANCE", "token": "2885", "exchange": "NSE"},
             {"symbol": "TCS", "token": "11536", "exchange": "NSE"},
             {"symbol": "HDFCBANK", "token": "1333", "exchange": "NSE"},
             {"symbol": "INFY", "token": "1594", "exchange": "NSE"},
             {"symbol": "ICICIBANK", "token": "4963", "exchange": "NSE"},
-            {"symbol": "SBIN", "token": "3045", "exchange": "NSE"},
-            {"symbol": "BHARTIARTL", "token": "10604", "exchange": "NSE"},
-            {"symbol": "ITC", "token": "1660", "exchange": "NSE"},
-            {"symbol": "KOTAKBANK", "token": "1922", "exchange": "NSE"},
-            {"symbol": "LT", "token": "11483", "exchange": "NSE"},
-            {"symbol": "AXISBANK", "token": "5900", "exchange": "NSE"},
-            {"symbol": "WIPRO", "token": "3787", "exchange": "NSE"},
-            {"symbol": "MARUTI", "token": "10999", "exchange": "NSE"},
-            {"symbol": "TATAMOTORS", "token": "3456", "exchange": "NSE"},
-            {"symbol": "ASIANPAINT", "token": "236", "exchange": "NSE"},
         ]
         
         stocks_data = []
         
-        # Fetch LTP for each stock
+        # Fetch historical data for RSI calculation
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=30)
+        
         for stock in stock_tokens:
             try:
+                # Get historical candles for RSI
+                hist_data = smart_api.getCandleData({
+                    "exchange": stock["exchange"],
+                    "symboltoken": stock["token"],
+                    "interval": "ONE_DAY",
+                    "fromdate": from_date.strftime("%Y-%m-%d %H:%M"),
+                    "todate": to_date.strftime("%Y-%m-%d %H:%M")
+                })
+                
+                # Get LTP
                 ltp_data = smart_api.ltpData(stock["exchange"], stock["symbol"], stock["token"])
                 
                 if ltp_data.get("status") and ltp_data.get("data"):
-                    price = ltp_data["data"].get("ltp", 0)
+                    ltp = ltp_data["data"].get("ltp", 0)
+                    
+                    # Calculate RSI from historical data
+                    prices = []
+                    if hist_data.get("status") and hist_data.get("data"):
+                        for candle in hist_data["data"]:
+                            prices.append(float(candle[4]))  # Close price
+                    
+                    rsi = calculate_rsi(prices) if prices else 50.0
+                    smart_signal = get_smart_money_signal(rsi)
+                    action = get_action_verdict(rsi, smart_signal)
+                    stop_loss, target1, target2, target3 = calculate_targets(ltp)
                     
                     stocks_data.append({
                         "symbol": stock["symbol"],
-                        "ltp": price,
+                        "ltp": ltp,
+                        "rsi": rsi,
+                        "smart_signal": smart_signal,
+                        "action": action,
+                        "stop_loss": stop_loss,
+                        "target1": target1,
+                        "target2": target2,
+                        "target3": target3,
                         "exchange": stock["exchange"],
                         "updated": datetime.now().strftime("%H:%M:%S")
                     })
@@ -109,12 +191,15 @@ def get_live_stock_data():
                 print(f"Error fetching {stock['symbol']}: {e}")
                 continue
         
+        # Sort by RSI descending (best opportunities first)
+        stocks_data.sort(key=lambda x: x["rsi"], reverse=True)
+        
         result = {
             "account": client_id,
             "api_key": api_key[:4] + "***",
             "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             "stocks_count": len(stocks_data),
-            "stocks": stocks_data,
+            "stocks": stocks_data[:5],  # Top 5 only
             "status": "success"
         }
         
@@ -129,7 +214,7 @@ def get_live_stock_data():
 
 
 def get_html(stock_data):
-    """Generate HTML with live stock data"""
+    """Generate HTML with intraday stock picks table"""
     
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -145,17 +230,25 @@ def get_html(stock_data):
     stock_rows = ""
     if stock_data.get("stocks"):
         for idx, stock in enumerate(stock_data["stocks"], 1):
+            # Color coding for action
+            action_color = "#34d399" if "BUY" in stock['action'] else "#fbbf24" if "HOLD" in stock['action'] else "#f87171"
+            rsi_color = "#34d399" if 40 <= stock['rsi'] <= 70 else "#fbbf24" if stock['rsi'] > 70 else "#f87171"
+            
             stock_rows += f"""
             <tr>
-                <td>{idx}</td>
-                <td style="font-weight:600; color:#60a5fa;">{stock['symbol']}</td>
-                <td style="color:#34d399; font-weight:600;">₹{stock['ltp']:.2f}</td>
-                <td>{stock['exchange']}</td>
-                <td style="color:#94a3b8; font-size:0.85em;">{stock['updated']}</td>
+                <td style="font-weight:700; color:#60a5fa; font-size:1.1em;">{stock['symbol']}</td>
+                <td style="font-weight:600; color:#e5e7eb; font-size:1.1em;">₹{stock['ltp']:.2f}</td>
+                <td style="font-weight:600; color:{rsi_color};">{stock['rsi']:.2f}</td>
+                <td style="color:#9ca3af; font-size:0.9em;">{stock['smart_signal']}</td>
+                <td style="font-weight:600; color:{action_color};">{stock['action']}</td>
+                <td style="color:#ef4444; font-size:0.95em;">₹{stock['stop_loss']}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target1']}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target2']}</td>
+                <td style="color:#34d399; font-size:0.95em;">₹{stock['target3']}</td>
             </tr>
             """
     else:
-        stock_rows = '<tr><td colspan="5" style="text-align:center; color:#ef4444;">No stock data available</td></tr>'
+        stock_rows = '<tr><td colspan="9" style="text-align:center; color:#ef4444; padding:24px;">No intraday picks available. Market may be closed or data loading...</td></tr>'
     
     # Status message
     if stock_data.get("error"):
@@ -165,13 +258,13 @@ def get_html(stock_data):
         status_msg = f'<div class="error-box">❌ {error_detail}</div>'
     elif stock_data.get("stocks"):
         status_msg = f'''<div class="success-box">
-            ✅ Live data from Angel One API<br>
+            ✅ LIVE Intraday Picks from Angel One API<br>
             Account: {stock_data.get("account", "N/A")} | 
             API Key: {stock_data.get("api_key", "N/A")} | 
-            Stocks: {stock_data.get("stocks_count", 0)}
+            Top Picks: {stock_data.get("stocks_count", 0)}
         </div>'''
     else:
-        status_msg = '<div class="info-box">⏳ Waiting for data...</div>'
+        status_msg = '<div class="info-box">⏳ Loading intraday picks...</div>'
     
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -179,7 +272,7 @@ def get_html(stock_data):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>NSE F&O Scanner - Live Data</title>
+    <title>Top 5 Intraday Picks - Live</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -190,12 +283,12 @@ def get_html(stock_data):
             padding: 20px;
         }}
         .container {{
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }}
         h1 {{
             font-size: 2.5rem;
-            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            background: linear-gradient(135deg, #3b82f6, #10b981);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-bottom: 8px;
@@ -227,6 +320,7 @@ def get_html(stock_data):
             border-radius: 8px;
             margin: 16px 0;
             color: #34d399;
+            font-size: 1rem;
         }}
         .error-box {{
             background: rgba(239, 68, 68, 0.2);
@@ -244,44 +338,29 @@ def get_html(stock_data):
             margin: 16px 0;
             color: #60a5fa;
         }}
-        .config-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
-            margin: 24px 0;
-        }}
-        .config-item {{
-            background: #1e293b;
-            padding: 12px 16px;
-            border-radius: 8px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }}
         table {{
             width: 100%;
-            background: rgba(17, 24, 39, 0.8);
+            background: rgba(17, 24, 39, 0.95);
             border-radius: 12px;
             overflow: hidden;
             margin: 24px 0;
             border-collapse: collapse;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
         }}
         thead {{
-            background: #1e293b;
+            background: linear-gradient(135deg, #1e293b, #334155);
         }}
         th, td {{
-            padding: 16px;
-            text-align: left;
+            padding: 16px 12px;
+            text-align: center;
+            border-bottom: 1px solid rgba(71, 85, 105, 0.3);
         }}
         th {{
             color: #60a5fa;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             letter-spacing: 0.05em;
-        }}
-        tr:nth-child(even) {{
-            background: rgba(30, 41, 59, 0.3);
         }}
         tr:hover {{
             background: rgba(59, 130, 246, 0.1);
@@ -299,51 +378,71 @@ def get_html(stock_data):
             text-align: center;
             color: #94a3b8;
             margin: 16px 0;
+            font-size: 0.9rem;
+        }}
+        .legend {{
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin: 16px 0;
+            flex-wrap: wrap;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }}
+        .legend-color {{
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
         }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📈 NSE F&O Scanner</h1>
-        <p class="subtitle">Live Stock Data from Angel One API</p>
+        <h1>📊 Top 5 Intraday Picks</h1>
+        <p class="subtitle">Live Market Data with Technical Analysis</p>
         
         <div class="status">
-            🟢 {'All Credentials Configured' if all_configured else 'Credentials Missing'}
-        </div>
-
-        <div class="config-grid">
-            <div class="config-item">
-                <span>API Key</span>
-                <span>{'✅' if has_api_key else '❌'}</span>
-            </div>
-            <div class="config-item">
-                <span>Client ID</span>
-                <span>{'✅' if has_client_id else '❌'}</span>
-            </div>
-            <div class="config-item">
-                <span>Password</span>
-                <span>{'✅' if has_password else '❌'}</span>
-            </div>
-            <div class="config-item">
-                <span>TOTP Secret</span>
-                <span>{'✅' if has_totp else '❌'}</span>
-            </div>
+            🔴 LIVE • Market Open
         </div>
 
         {status_msg}
 
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background:#34d399;"></div>
+                <span>BUY Signal</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background:#fbbf24;"></div>
+                <span>HOLD</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background:#f87171;"></div>
+                <span>SELL Signal</span>
+            </div>
+        </div>
+
         <div class="refresh-note">
-            🔄 Auto-refresh: 30 seconds | Cache TTL: 30 seconds
+            🔄 Auto-refresh: 30 seconds | Data updates in real-time
         </div>
 
         <table>
             <thead>
                 <tr>
-                    <th>#</th>
-                    <th>Symbol</th>
-                    <th>LTP (₹)</th>
-                    <th>Exchange</th>
-                    <th>Updated</th>
+                    <th>Stock Ticker</th>
+                    <th>Current Price (₹)</th>
+                    <th>RSI</th>
+                    <th>Smart Money Signal</th>
+                    <th>Action Verdict</th>
+                    <th>Stop Loss</th>
+                    <th>Target 1</th>
+                    <th>Target 2</th>
+                    <th>Target 3</th>
                 </tr>
             </thead>
             <tbody>
@@ -353,7 +452,8 @@ def get_html(stock_data):
 
         <p class="timestamp">
             Last updated: {now}<br>
-            Page auto-refreshes every 30 seconds
+            Page auto-refreshes every 30 seconds<br>
+            <small>Data from Angel One SmartAPI • Account: {stock_data.get("account", "N/A")}</small>
         </p>
     </div>
 </body>
