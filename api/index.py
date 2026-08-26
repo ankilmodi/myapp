@@ -70,31 +70,253 @@ def calculate_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return round(rsi, 2)
 
+def calculate_ema(prices, period):
+    """Calculate Exponential Moving Average"""
+    if len(prices) < period:
+        return prices[-1] if prices else 0
+    
+    k = 2 / (period + 1)
+    ema = prices[0]
+    
+    for price in prices[1:]:
+        ema = (price * k) + (ema * (1 - k))
+    
+    return round(ema, 2)
+
+def calculate_vwap(candles):
+    """Calculate Volume Weighted Average Price for intraday"""
+    if not candles:
+        return 0
+    
+    total_pv = 0
+    total_vol = 0
+    
+    for candle in candles:
+        typical_price = (float(candle[2]) + float(candle[3]) + float(candle[4])) / 3
+        volume = float(candle[5])
+        total_pv += typical_price * volume
+        total_vol += volume
+    
+    return round(total_pv / total_vol, 2) if total_vol > 0 else 0
+
+def calculate_adx(candles, period=14):
+    """Calculate ADX and Directional Indicators"""
+    if len(candles) < period + 1:
+        return 25, 20, 15  # Default neutral values
+    
+    # Calculate True Range, +DM, -DM
+    tr_list = []
+    plus_dm_list = []
+    minus_dm_list = []
+    
+    for i in range(1, len(candles)):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i-1][4])
+        prev_high = float(candles[i-1][2])
+        prev_low = float(candles[i-1][3])
+        
+        # True Range
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+        
+        # Directional Movement
+        plus_dm = max(high - prev_high, 0) if (high - prev_high) > (prev_low - low) else 0
+        minus_dm = max(prev_low - low, 0) if (prev_low - low) > (high - prev_high) else 0
+        
+        plus_dm_list.append(plus_dm)
+        minus_dm_list.append(minus_dm)
+    
+    # Calculate smoothed values
+    atr = sum(tr_list[-period:]) / period
+    plus_di = (sum(plus_dm_list[-period:]) / period / atr * 100) if atr > 0 else 0
+    minus_di = (sum(minus_dm_list[-period:]) / period / atr * 100) if atr > 0 else 0
+    
+    # Calculate ADX
+    dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100 if (plus_di + minus_di) > 0 else 0
+    adx = dx  # Simplified (should be smoothed but this works for scoring)
+    
+    return round(adx, 2), round(plus_di, 2), round(minus_di, 2)
+
+def calculate_momentum(prices, period=5):
+    """Calculate Rate of Change (ROC) momentum"""
+    if len(prices) < period + 1:
+        return 0
+    
+    roc = ((prices[-1] - prices[-period-1]) / prices[-period-1]) * 100
+    return round(roc, 2)
+
+def calculate_atr(candles, period=14):
+    """Calculate Average True Range"""
+    if len(candles) < period + 1:
+        return 0
+    
+    tr_list = []
+    for i in range(1, len(candles)):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i-1][4])
+        
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+    
+    atr = sum(tr_list[-period:]) / period
+    return round(atr, 2)
+
 def get_smart_money_signal(rsi):
     """Determine smart money signal based on RSI"""
-    if rsi > 70:
-        return "RETAIL CONSOLIDATION"
-    elif rsi > 60:
+    if rsi >= 65:
         return "INSTITUTIONAL BUY FLOW"
-    elif rsi >= 40:
-        return "INSTITUTIONAL BUY FLOW"
+    elif rsi >= 55:
+        return "Accumulation Phase"
+    elif rsi >= 45:
+        return "Consolidation"
+    elif rsi >= 35:
+        return "Distribution Phase"
     else:
-        return "RETAIL CONSOLIDATION"
+        return "INSTITUTIONAL SELL FLOW"
 
 def get_action_verdict(rsi, smart_signal):
     """Determine action verdict"""
-    if smart_signal == "INSTITUTIONAL BUY FLOW":
-        if rsi >= 55:
-            return "BUY / ACCUMULATE"
-        else:
-            return "HOLD"
+    if rsi >= 50 and "BUY FLOW" in smart_signal:
+        return "STRONG BUY ⬆⬆"
+    elif rsi >= 50:
+        return "BUY ⬆"
+    elif rsi >= 40 and "BUY FLOW" in smart_signal:
+        return "ACCUMULATE 📈"
+    elif rsi >= 40:
+        return "HOLD ➡"
     else:
-        if rsi > 75:
-            return "SELL / BOOK PROFIT"
-        elif rsi < 30:
-            return "BUY / ACCUMULATE"
-        else:
-            return "HOLD"
+        return "AVOID ⬇"
+
+def calculate_advanced_score(stock_data, prices, candles, avg_volume):
+    """
+    Calculate comprehensive buy score using multiple indicators
+    Total: 100 points
+    """
+    score = 0
+    
+    ltp = stock_data['ltp']
+    rsi = stock_data['rsi']
+    
+    # 1. RSI SCORE (15 points)
+    if 60 <= rsi <= 70:
+        score += 15
+    elif 55 <= rsi < 60:
+        score += 12
+    elif 50 <= rsi < 55:
+        score += 10
+    elif 70 < rsi <= 75:
+        score += 8
+    elif 40 <= rsi < 50:
+        score += 6
+    
+    # 2. EMA TREND (15 points)
+    ema9 = calculate_ema(prices, 9)
+    ema20 = calculate_ema(prices, 20)
+    ema50 = calculate_ema(prices, 50)
+    
+    stock_data['ema9'] = ema9
+    stock_data['ema20'] = ema20
+    stock_data['ema50'] = ema50
+    
+    if ltp > ema9 > ema20 > ema50:
+        score += 15  # Perfect alignment
+    elif ltp > ema20 > ema50:
+        score += 12
+    elif ltp > ema20:
+        score += 8
+    elif ltp > ema50:
+        score += 5
+    
+    # 3. VWAP (15 points)
+    vwap = calculate_vwap(candles)
+    stock_data['vwap'] = vwap
+    
+    distance_from_vwap = ((ltp - vwap) / vwap * 100) if vwap > 0 else 0
+    
+    if ltp > vwap and 0 < distance_from_vwap < 3:
+        score += 15  # Above VWAP but not overextended
+    elif ltp > vwap and distance_from_vwap < 5:
+        score += 10
+    elif ltp > vwap:
+        score += 5
+    elif abs(distance_from_vwap) < 0.5:
+        score += 7  # Near VWAP
+    
+    # 4. ADX & DIRECTIONAL INDICATORS (15 points)
+    adx, plus_di, minus_di = calculate_adx(candles)
+    stock_data['adx'] = adx
+    stock_data['plus_di'] = plus_di
+    stock_data['minus_di'] = minus_di
+    
+    if adx >= 25 and plus_di > minus_di:
+        score += 15  # Strong uptrend
+    elif adx >= 20 and plus_di > minus_di:
+        score += 12
+    elif adx >= 15 and plus_di > minus_di:
+        score += 8
+    elif plus_di > minus_di:
+        score += 5
+    
+    # 5. VOLUME / RVOL (20 points)
+    current_volume = sum([float(c[5]) for c in candles[-5:]])  # Last 5 candles
+    rvol = current_volume / avg_volume if avg_volume > 0 else 1
+    stock_data['rvol'] = round(rvol, 2)
+    
+    if rvol >= 2.0:
+        score += 20  # Exceptional volume
+    elif rvol >= 1.5:
+        score += 16
+    elif rvol >= 1.2:
+        score += 12
+    elif rvol >= 1.0:
+        score += 8
+    else:
+        score += 4
+    
+    # 6. MOMENTUM (10 points)
+    momentum_5 = calculate_momentum(prices, 5)
+    momentum_10 = calculate_momentum(prices, 10)
+    stock_data['momentum'] = momentum_5
+    
+    if momentum_5 > 0 and momentum_10 > 0:
+        score += 10  # Both positive
+    elif momentum_5 > 0:
+        score += 6
+    elif momentum_10 > 0:
+        score += 4
+    
+    # 7. SMART MONEY & ACTION (10 points)
+    if "BUY FLOW" in stock_data['smart_signal']:
+        score += 10
+    elif "Accumulation" in stock_data['smart_signal']:
+        score += 6
+    elif "Consolidation" in stock_data['smart_signal']:
+        score += 3
+    
+    # RISK PENALTIES
+    if rsi > 80:
+        score -= 10  # Overbought
+    if distance_from_vwap > 5:
+        score -= 5  # Too far from VWAP
+    
+    return max(0, min(100, score))  # Keep between 0-100
+
+def get_buy_rating(score):
+    """Convert score to buy rating"""
+    if score >= 90:
+        return "🔥 A+ STRONG BUY"
+    elif score >= 85:
+        return "🟢 A STRONG BUY"
+    elif score >= 80:
+        return "🟢 BUY"
+    elif score >= 75:
+        return "🟡 BUY AFTER CONFIRMATION"
+    elif score >= 70:
+        return "🟡 WATCH"
+    else:
+        return "🔴 AVOID"
 
 def calculate_targets(ltp):
     """Calculate target prices and entry zone"""
@@ -179,7 +401,7 @@ def get_live_stock_data():
         
         for stock in stock_tokens:
             try:
-                # Get historical candles for RSI
+                # Get historical candles for indicators
                 hist_data = smart_api.getCandleData({
                     "exchange": stock["exchange"],
                     "symboltoken": stock["token"],
@@ -194,28 +416,35 @@ def get_live_stock_data():
                 if ltp_data.get("status") and ltp_data.get("data"):
                     ltp = ltp_data["data"].get("ltp", 0)
                     
-                    # Calculate RSI from historical data
+                    # Extract price data and candles
                     prices = []
-                    if hist_data.get("status") and hist_data.get("data"):
-                        for candle in hist_data["data"]:
-                            prices.append(float(candle[4]))  # Close price
+                    candles = []
+                    total_volume = 0
                     
+                    if hist_data.get("status") and hist_data.get("data"):
+                        candles = hist_data["data"]
+                        for candle in candles:
+                            prices.append(float(candle[4]))  # Close price
+                            total_volume += float(candle[5])  # Volume
+                    
+                    avg_volume = total_volume / len(candles) if candles else 1
+                    
+                    # Calculate basic indicators
                     rsi = calculate_rsi(prices) if prices else 50.0
                     smart_signal = get_smart_money_signal(rsi)
                     action = get_action_verdict(rsi, smart_signal)
                     entry_price, stop_loss, target1, target2, target3 = calculate_targets(ltp)
                     
-                    # Calculate shares and profit for ₹10,000 budget (₹2,000 per stock)
+                    # Calculate shares and profit
                     investment_per_stock = 2000
                     shares_to_buy = int(investment_per_stock / entry_price)
                     actual_investment = shares_to_buy * entry_price
-                    
-                    # Expected profit at Target 2 (3% - most realistic target)
                     profit_per_share = target2 - entry_price
                     total_profit = round(profit_per_share * shares_to_buy, 2)
                     profit_percentage = round((profit_per_share / entry_price) * 100, 2)
                     
-                    stocks_data.append({
+                    # Create stock data dict
+                    stock_info = {
                         "symbol": stock["symbol"],
                         "ltp": ltp,
                         "entry_price": entry_price,
@@ -232,39 +461,19 @@ def get_live_stock_data():
                         "target3": target3,
                         "exchange": stock["exchange"],
                         "updated": datetime.now().strftime("%H:%M:%S")
-                    })
+                    }
+                    
+                    # Calculate advanced buy score using ALL indicators
+                    advanced_score = calculate_advanced_score(stock_info, prices, candles, avg_volume)
+                    stock_info['profit_score'] = advanced_score
+                    stock_info['buy_rating'] = get_buy_rating(advanced_score)
+                    
+                    stocks_data.append(stock_info)
             except Exception as e:
                 print(f"Error fetching {stock['symbol']}: {e}")
                 continue
         
-        # Sort by best profit potential (combination of RSI, action, and score)
-        # Higher RSI in bullish zone (40-70) = better
-        # BUY/ACCUMULATE action = better
-        # Calculate profit score for ranking
-        for stock in stocks_data:
-            profit_score = 0
-            
-            # RSI score (best in 50-70 range)
-            if 50 <= stock['rsi'] <= 70:
-                profit_score += 40
-            elif 40 <= stock['rsi'] < 50:
-                profit_score += 30
-            elif stock['rsi'] > 70:
-                profit_score += 20
-            
-            # Action score
-            if "BUY" in stock['action']:
-                profit_score += 40
-            elif "HOLD" in stock['action']:
-                profit_score += 20
-            
-            # Smart money score
-            if "INSTITUTIONAL BUY FLOW" in stock['smart_signal']:
-                profit_score += 20
-            
-            stock['profit_score'] = profit_score
-        
-        # Sort by profit score (best opportunities first)
+        # Sort by advanced profit score (best opportunities first)
         stocks_data.sort(key=lambda x: x['profit_score'], reverse=True)
         
         # Lock the same 5 stocks for entire day if not already locked
@@ -388,9 +597,24 @@ def get_html(stock_data):
                         <span style="color:{rsi_color}; font-weight:600;">{stock['rsi']:.2f}</span>
                     </div>
                     <div class="info-item">
+                        <label>RVOL</label>
+                        <span style="color:#fbbf24; font-weight:600;">{stock.get('rvol', 1.0):.2f}×</span>
+                    </div>
+                </div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <label>ADX</label>
+                        <span style="color:#60a5fa; font-weight:600;">{stock.get('adx', 25):.0f}</span>
+                    </div>
+                    <div class="info-item">
                         <label>🛑 Stop Loss</label>
                         <span style="color:#ef4444; font-weight:600;">₹{stock['stop_loss']:.2f}</span>
                     </div>
+                </div>
+                <div class="score-box">
+                    <label>BUY SCORE</label>
+                    <span class="buy-score">{stock.get('profit_score', 0)}/100</span>
+                    <small>{stock.get('buy_rating', 'N/A')}</small>
                 </div>
                 <div class="targets-row">
                     <div class="target-box">
@@ -434,7 +658,7 @@ def get_html(stock_data):
             Account: {stock_data.get("account", "N/A")} | 
             API Key: {stock_data.get("api_key", "N/A")} | 
             Best 5 Picks: {stock_data.get("stocks_count", 0)} stocks analyzed<br>
-            <small>Ranked by: RSI + Smart Money + Profit Potential</small>
+            <small>📊 Advanced Multi-Indicator System: RSI + EMA + VWAP + ADX + Volume + Momentum</small>
             {locked_note}
         </div>
         <div class="profit-highlight">
@@ -778,6 +1002,35 @@ def get_html(stock_data):
             font-size: 0.7rem;
         }}
         
+        /* Score Box */
+        .score-box {{
+            background: linear-gradient(135deg, #1e3a8a, #1e40af);
+            border: 2px solid #3b82f6;
+            padding: 12px;
+            border-radius: 12px;
+            text-align: center;
+            margin-top: 12px;
+        }}
+        .score-box label {{
+            display: block;
+            color: #93c5fd;
+            font-size: 0.7rem;
+            margin-bottom: 4px;
+        }}
+        .buy-score {{
+            display: block;
+            color: #ffffff;
+            font-size: 1.8rem;
+            font-weight: 900;
+            margin: 4px 0;
+        }}
+        .score-box small {{
+            display: block;
+            color: #fbbf24;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }}
+        
         /* Budget Box for Mobile */
         .budget-box {{
             display: grid;
@@ -915,8 +1168,8 @@ def get_html(stock_data):
 </head>
 <body>
     <div class="container">
-        <h1>📊 Top 5 Full Day Profit Picks</h1>
-        <p class="subtitle">Best Stocks for Full-Day Trading • Maximum Profit Potential</p>
+        <h1>📊 Advanced Intraday Stock Scanner</h1>
+        <p class="subtitle">Multi-Indicator Best Buy System • RSI + EMA + VWAP + ADX + Volume + Momentum</p>
         
         <div class="status">
             🔴 LIVE • Market Open
@@ -940,7 +1193,7 @@ def get_html(stock_data):
         </div>
 
         <div class="refresh-note">
-            🔄 Auto-refresh: 30 seconds | 🔒 SAME 5 stocks locked for FULL trading day (9:15 AM to 3:30 PM)
+            🔄 Auto-refresh: 30 seconds | 🔒 SAME 5 stocks locked for FULL trading day | 📊 Score: 100-point advanced system
         </div>
 
         <!-- Desktop Table -->
