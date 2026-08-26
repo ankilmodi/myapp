@@ -207,16 +207,44 @@ def get_live_stock_data():
                 print(f"Error fetching {stock['symbol']}: {e}")
                 continue
         
-        # Sort by RSI descending (best opportunities first)
-        stocks_data.sort(key=lambda x: x["rsi"], reverse=True)
+        # Sort by best profit potential (combination of RSI, action, and score)
+        # Higher RSI in bullish zone (40-70) = better
+        # BUY/ACCUMULATE action = better
+        # Calculate profit score for ranking
+        for stock in stocks_data:
+            profit_score = 0
+            
+            # RSI score (best in 50-70 range)
+            if 50 <= stock['rsi'] <= 70:
+                profit_score += 40
+            elif 40 <= stock['rsi'] < 50:
+                profit_score += 30
+            elif stock['rsi'] > 70:
+                profit_score += 20
+            
+            # Action score
+            if "BUY" in stock['action']:
+                profit_score += 40
+            elif "HOLD" in stock['action']:
+                profit_score += 20
+            
+            # Smart money score
+            if "INSTITUTIONAL BUY FLOW" in stock['smart_signal']:
+                profit_score += 20
+            
+            stock['profit_score'] = profit_score
+        
+        # Sort by profit score (best opportunities first)
+        stocks_data.sort(key=lambda x: x['profit_score'], reverse=True)
         
         result = {
             "account": client_id,
             "api_key": api_key[:4] + "***",
             "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             "stocks_count": len(stocks_data),
-            "stocks": stocks_data[:5],  # Top 5 only
-            "status": "success"
+            "stocks": stocks_data[:5],  # Top 5 best profit potential
+            "status": "success",
+            "note": "Top 5 stocks with best full-day profit potential"
         }
         
         # Update cache
@@ -275,10 +303,11 @@ def get_html(stock_data):
         status_msg = f'<div class="error-box">❌ {error_detail}</div>'
     elif stock_data.get("stocks"):
         status_msg = f'''<div class="success-box">
-            ✅ LIVE Intraday Picks from Angel One API<br>
+            ✅ LIVE Full-Day Profit Picks from Angel One API<br>
             Account: {stock_data.get("account", "N/A")} | 
             API Key: {stock_data.get("api_key", "N/A")} | 
-            Top Picks: {stock_data.get("stocks_count", 0)}
+            Best 5 Picks: {stock_data.get("stocks_count", 0)} stocks analyzed<br>
+            <small>Ranked by: RSI + Smart Money + Profit Potential</small>
         </div>'''
     else:
         status_msg = '<div class="info-box">⏳ Loading intraday picks...</div>'
@@ -289,7 +318,7 @@ def get_html(stock_data):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>Top 5 Intraday Picks - Live</title>
+    <title>Top 5 Full Day Profit Picks - Live</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -420,8 +449,8 @@ def get_html(stock_data):
 </head>
 <body>
     <div class="container">
-        <h1>📊 Top 5 Intraday Picks</h1>
-        <p class="subtitle">Live Market Data with Technical Analysis</p>
+        <h1>📊 Top 5 Full Day Profit Picks</h1>
+        <p class="subtitle">Best Stocks for Full-Day Trading • Maximum Profit Potential</p>
         
         <div class="status">
             🔴 LIVE • Market Open
@@ -445,7 +474,7 @@ def get_html(stock_data):
         </div>
 
         <div class="refresh-note">
-            🔄 Auto-refresh: 30 seconds | Data updates in real-time
+            🔄 Auto-refresh: 30 seconds | Showing ONLY top 5 stocks with BEST full-day profit potential
         </div>
 
         <table>
