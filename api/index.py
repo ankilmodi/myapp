@@ -437,12 +437,19 @@ def get_html(stock_data):
             <small>Ranked by: RSI + Smart Money + Profit Potential</small>
             {locked_note}
         </div>
+        <div class="profit-highlight">
+            <div class="profit-main">
+                <label>💰 TOTAL FINAL PROFIT (Full Day)</label>
+                <span class="profit-amount">₹{total_expected_profit:.2f}</span>
+                <small>Expected profit at end of trading day (3:15 PM)</small>
+            </div>
+        </div>
         <div class="budget-summary">
             <div class="summary-item">
-                <label>💵 Total Investment (5 stocks)</label>
+                <label>💵 Total Investment</label>
                 <span class="value">₹{total_investment:.0f}</span>
             </div>
-            <div class="summary-item highlight">
+            <div class="summary-item">
                 <label>💰 Total Expected Profit</label>
                 <span class="value profit">₹{total_expected_profit:.2f}</span>
             </div>
@@ -525,6 +532,51 @@ def get_html(stock_data):
             border-radius: 8px;
             margin: 16px 0;
             color: #60a5fa;
+        }}
+        .profit-highlight {{
+            background: linear-gradient(135deg, #065f46, #047857);
+            border: 3px solid #10b981;
+            border-radius: 16px;
+            padding: 24px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3);
+            animation: pulse-glow 2s ease-in-out infinite;
+        }}
+        @keyframes pulse-glow {{
+            0%, 100% {{ box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3); }}
+            50% {{ box-shadow: 0 10px 60px rgba(16, 185, 129, 0.6); }}
+        }}
+        .profit-main label {{
+            display: block;
+            color: #d1fae5;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .profit-amount {{
+            display: block;
+            color: #ffffff;
+            font-size: 3.5rem;
+            font-weight: 900;
+            text-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            margin: 12px 0;
+        }}
+        .profit-main small {{
+            display: block;
+            color: #a7f3d0;
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }}
+        @media (max-width: 768px) {{
+            .profit-amount {{
+                font-size: 2.5rem;
+            }}
+            .profit-main label {{
+                font-size: 0.95rem;
+            }}
         }}
         .budget-summary {{
             display: grid;
