@@ -26,6 +26,9 @@ try:
 except Exception as e:
     IMPORTS_OK = False; import_errors.append(f"SmartApi: {e}")
 
+# Log import status on module load
+print("IMPORT STATUS: OK=%s errors=%s" % (IMPORTS_OK, import_errors))
+
 # ── In-memory cache ────────────────────────────────────────────────────────
 _cache = {"data": None, "ts": None, "ttl": 300}  # 5-min TTL
 
