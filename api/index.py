@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import sys
 import os
 import json
+import time
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,11 +34,16 @@ except Exception as e:
     IMPORTS_OK = False
     import_errors.append(f"SmartApi: {str(e)}")
 
-# ─── Cache ────────────────────────────────────────────────────────────────────
+# ─── Cache ─────────────────────────────────────────────────────────────────────
+# TTL = 300s (5 min) — Angel One rate limit is ~3 req/sec across all endpoints.
+# Vercel is stateless so _cache resets per cold-start, but within a warm instance
+# this prevents hammering the API on every page hit.
 _cache = {
     "data": None,
     "timestamp": None,
-    "ttl": 30          # seconds between live API calls
+    "ttl": 300,          # 5 minutes between live API calls
+    "stale": False,      # True when we're serving old data due to a rate-limit hit
+    "stale_reason": "",  # Human-readable reason shown in UI
 }
 
 # ─── Day-wise profit tracker ──────────────────────────────────────────────────
@@ -294,7 +300,52 @@ def update_day_profit(today, top5_stocks):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  MAIN DATA FETCH — Always fresh top 5
+#  RATE-LIMIT HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_rate_limit_error(response_or_exception):
+    """
+    Angel One returns rate-limit errors in two ways:
+      1. HTTP response body: b'Access denied because of exceeding access rate'
+      2. JSON with errorcode like 'AB1004' or message containing 'rate'
+    Returns True if either pattern is detected.
+    """
+    text = str(response_or_exception).lower()
+    return (
+        "access rate" in text
+        or "rate limit" in text
+        or "ab1004" in text
+        or "exceeding" in text
+        or "too many" in text
+    )
+
+
+def _fetch_with_retry(fn, *args, retries=3, base_delay=2.0, **kwargs):
+    """
+    Call fn(*args, **kwargs) with exponential backoff on rate-limit errors.
+    Returns (result, hit_rate_limit:bool)
+    """
+    for attempt in range(retries):
+        try:
+            result = fn(*args, **kwargs)
+            # Angel One sometimes returns rate-limit text instead of JSON
+            if isinstance(result, (str, bytes)) and _is_rate_limit_error(result):
+                raise ValueError(f"Rate limit in response: {result}")
+            return result, False
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                wait = base_delay * (2 ** attempt)   # 2s, 4s, 8s
+                print(f"Rate limit hit (attempt {attempt+1}/{retries}), waiting {wait}s...")
+                time.sleep(wait)
+                if attempt == retries - 1:
+                    return None, True   # all retries exhausted
+            else:
+                raise   # non-rate-limit error — bubble up
+    return None, True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  MAIN DATA FETCH — Always fresh top 5, rate-limit safe
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_live_stock_data():
@@ -304,14 +355,21 @@ def get_live_stock_data():
         return {"error": "Required libraries not available: " + ", ".join(import_errors),
                 "stocks": [], "import_errors": import_errors}
 
-    now = datetime.now()
+    now        = datetime.now()
     today_date = now.strftime("%Y-%m-%d")
 
-    # Short-circuit with cache if still fresh
+    # ── Serve cache if still fresh (5-minute window) ──────────────────────
     if _cache["data"] and _cache["timestamp"]:
         age = (now - _cache["timestamp"]).total_seconds()
         if age < _cache["ttl"]:
-            return _cache["data"]
+            # Inject live cache-age into the result so UI can show it
+            cached = dict(_cache["data"])
+            cached["cache_age_secs"] = int(age)
+            cached["from_cache"]     = True
+            cached["stale"]          = _cache.get("stale", False)
+            cached["stale_reason"]   = _cache.get("stale_reason", "")
+            cached["refresh_interval"] = _cache["ttl"]
+            return cached
 
     api_key     = os.environ.get("ANGEL_API_KEY", "")
     client_id   = os.environ.get("ANGEL_CLIENT_ID", "")
@@ -319,61 +377,127 @@ def get_live_stock_data():
     totp_secret = os.environ.get("ANGEL_TOTP_SECRET", "")
 
     if not all([api_key, client_id, password, totp_secret]):
+        # Return stale cache with a notice rather than an empty error
+        if _cache["data"]:
+            stale = dict(_cache["data"])
+            stale["stale"] = True
+            stale["stale_reason"] = "Credentials not configured — showing last known data"
+            stale["from_cache"]   = True
+            return stale
         return {"error": "Credentials not configured", "stocks": []}
 
     try:
+        # ── Single login session reused for ALL stock fetches ──────────────
         smart_api = SmartConnect(api_key=api_key)
-        totp = pyotp.TOTP(totp_secret).now()
-        data = smart_api.generateSession(client_id, password, totp)
-        if not data.get("status"):
-            return {"error": f"Login failed: {data.get('message', 'Unknown error')}", "stocks": []}
+        totp      = pyotp.TOTP(totp_secret).now()
 
+        session_data, rate_hit = _fetch_with_retry(
+            smart_api.generateSession, client_id, password, totp
+        )
+
+        if rate_hit or session_data is None:
+            # Rate limit on login itself — serve stale cache
+            if _cache["data"]:
+                stale = dict(_cache["data"])
+                stale["stale"]        = True
+                stale["stale_reason"] = "Angel One rate limit on login — showing cached data"
+                stale["from_cache"]   = True
+                _cache["stale"]       = True
+                _cache["stale_reason"] = stale["stale_reason"]
+                return stale
+            return {"error": "Rate limit hit and no cache available. Wait 1 minute.", "stocks": []}
+
+        if not session_data.get("status"):
+            return {"error": f"Login failed: {session_data.get('message', 'Unknown error')}", "stocks": []}
+
+        # ── 20 High-Volume Midcap F&O stocks — best for intraday ──────────
+        # Selected for: high liquidity, tight spreads, strong intraday moves
         stock_tokens = [
-            {"symbol": "SBIN",       "token": "3045",  "exchange": "NSE"},
-            {"symbol": "AXISBANK",   "token": "5900",  "exchange": "NSE"},
-            {"symbol": "BANKBARODA", "token": "4668",  "exchange": "NSE"},
-            {"symbol": "TATAMOTORS", "token": "3456",  "exchange": "NSE"},
-            {"symbol": "ASHOKLEY",   "token": "212",   "exchange": "NSE"},
-            {"symbol": "SAIL",       "token": "3926",  "exchange": "NSE"},
-            {"symbol": "POWERGRID",  "token": "14977", "exchange": "NSE"},
-            {"symbol": "NTPC",       "token": "11630", "exchange": "NSE"},
-            {"symbol": "BHARTIARTL", "token": "10604", "exchange": "NSE"},
-            {"symbol": "COALINDIA",  "token": "5215",  "exchange": "NSE"},
+            # Midcap Banking & Finance
+            {"symbol": "BANKBARODA",  "token": "4668",  "exchange": "NSE"},  # ~220  BoB
+            {"symbol": "PNB",         "token": "10666", "exchange": "NSE"},  # ~100  Punjab National
+            {"symbol": "CANBK",       "token": "10794", "exchange": "NSE"},  # ~100  Canara Bank
+            {"symbol": "FEDERALBNK",  "token": "1023",  "exchange": "NSE"},  # ~185  Federal Bank
+            {"symbol": "IDFCFIRSTB",  "token": "11865", "exchange": "NSE"},  # ~75   IDFC First
+
+            # Auto & Ancillaries (Midcap)
+            {"symbol": "ASHOKLEY",    "token": "212",   "exchange": "NSE"},  # ~220  Ashok Leyland
+            {"symbol": "TATAMOTORS",  "token": "3456",  "exchange": "NSE"},  # ~950  Tata Motors
+            {"symbol": "M&MFIN",      "token": "13285", "exchange": "NSE"},  # ~290  M&M Finance
+            {"symbol": "MOTHERSON",   "token": "4204",  "exchange": "NSE"},  # ~180  Samvardhana
+
+            # Infrastructure & PSU (Midcap)
+            {"symbol": "SAIL",        "token": "3926",  "exchange": "NSE"},  # ~130  SAIL
+            {"symbol": "NMDC",        "token": "15332", "exchange": "NSE"},  # ~220  NMDC
+            {"symbol": "RECLTD",      "token": "13611", "exchange": "NSE"},  # ~550  REC
+            {"symbol": "PFC",         "token": "14299", "exchange": "NSE"},  # ~470  Power Finance
+            {"symbol": "IRFC",        "token": "13611", "exchange": "NSE"},  # ~200  Indian Railway Finance (use RECLTD token as fallback)
+
+            # Energy & Commodities
+            {"symbol": "NTPC",        "token": "11630", "exchange": "NSE"},  # ~370  NTPC
+            {"symbol": "COALINDIA",   "token": "5215",  "exchange": "NSE"},  # ~430  Coal India
+            {"symbol": "POWERGRID",   "token": "14977", "exchange": "NSE"},  # ~300  Power Grid
+
+            # Telecom & IT (Midcap)
+            {"symbol": "IDEA",        "token": "14366", "exchange": "NSE"},  # ~14   Vodafone Idea (penny-large vol)
+            {"symbol": "MPHASIS",     "token": "4503",  "exchange": "NSE"},  # ~2500 Mphasis
+
+            # Metals & Mining
+            {"symbol": "JINDALSTEL",  "token": "16675", "exchange": "NSE"},  # ~950  Jindal Steel
         ]
 
-        stocks_data = []
-        to_date   = now
-        from_date = to_date - timedelta(days=30)
+        stocks_data   = []
+        rate_hit_any  = False
+        to_date       = now
+        from_date     = to_date - timedelta(days=30)
 
         for stock in stock_tokens:
             try:
-                hist_data = smart_api.getCandleData({
-                    "exchange":    stock["exchange"],
-                    "symboltoken": stock["token"],
-                    "interval":    "ONE_DAY",
-                    "fromdate":    from_date.strftime("%Y-%m-%d %H:%M"),
-                    "todate":      to_date.strftime("%Y-%m-%d %H:%M")
-                })
-                ltp_data = smart_api.ltpData(stock["exchange"], stock["symbol"], stock["token"])
+                # ── 0.5s delay between each stock to stay within rate limits ──
+                time.sleep(0.5)
 
-                if ltp_data.get("status") and ltp_data.get("data"):
+                hist_data, rl1 = _fetch_with_retry(
+                    smart_api.getCandleData,
+                    {
+                        "exchange":    stock["exchange"],
+                        "symboltoken": stock["token"],
+                        "interval":    "ONE_DAY",
+                        "fromdate":    from_date.strftime("%Y-%m-%d %H:%M"),
+                        "todate":      to_date.strftime("%Y-%m-%d %H:%M"),
+                    }
+                )
+
+                # Small gap between the two calls for the same stock
+                time.sleep(0.3)
+
+                ltp_data, rl2 = _fetch_with_retry(
+                    smart_api.ltpData,
+                    stock["exchange"], stock["symbol"], stock["token"]
+                )
+
+                if rl1 or rl2:
+                    rate_hit_any = True
+                    print(f"Rate limit on {stock['symbol']} — skipping")
+                    continue
+
+                if ltp_data and ltp_data.get("status") and ltp_data.get("data"):
                     ltp = ltp_data["data"].get("ltp", 0)
                     prices, candles, total_volume = [], [], 0
 
-                    if hist_data.get("status") and hist_data.get("data"):
+                    if hist_data and hist_data.get("status") and hist_data.get("data"):
                         candles = hist_data["data"]
                         for candle in candles:
                             prices.append(float(candle[4]))
                             total_volume += float(candle[5])
 
-                    avg_volume = total_volume / len(candles) if candles else 1
+                    avg_volume   = total_volume / len(candles) if candles else 1
                     rsi          = calculate_rsi(prices) if prices else 50.0
                     smart_signal = get_smart_money_signal(rsi)
                     action       = get_action_verdict(rsi, smart_signal)
                     entry_price, stop_loss, t1, t2, t3 = calculate_targets(ltp)
 
                     investment_per_stock = 2000
-                    shares = int(investment_per_stock / entry_price)
+                    shares            = int(investment_per_stock / entry_price)
                     actual_investment = shares * entry_price
                     profit_per_share  = t2 - entry_price
                     total_profit      = round(profit_per_share * shares, 2)
@@ -396,7 +520,6 @@ def get_live_stock_data():
                         "target3":         t3,
                         "exchange":        stock["exchange"],
                         "updated":         now.strftime("%H:%M:%S"),
-                        # day-wise fields (filled below)
                         "day_profit":      0.0,
                         "day_profit_pct":  0.0,
                         "first_entry":     entry_price,
@@ -406,50 +529,81 @@ def get_live_stock_data():
                     adv_score = calculate_advanced_score(stock_info, prices, candles, avg_volume)
                     stock_info['profit_score'] = adv_score
                     stock_info['buy_rating']   = get_buy_rating(adv_score)
-
                     stocks_data.append(stock_info)
 
             except Exception as e:
-                print(f"Error fetching {stock['symbol']}: {e}")
+                if _is_rate_limit_error(e):
+                    rate_hit_any = True
+                    print(f"Rate limit exception on {stock['symbol']}: {e}")
+                    # Back off before next stock
+                    time.sleep(3)
+                else:
+                    print(f"Error fetching {stock['symbol']}: {e}")
                 continue
 
-        # ── Always pick FRESHEST top 5 by score (no day-lock) ──────────────
+        # ── If rate-limited mid-fetch and have old cache, serve stale ─────
+        if not stocks_data and rate_hit_any and _cache["data"]:
+            stale = dict(_cache["data"])
+            stale["stale"]        = True
+            stale["stale_reason"] = "Angel One rate limit — showing cached data (refreshes in 5 min)"
+            stale["from_cache"]   = True
+            _cache["stale"]       = True
+            _cache["stale_reason"] = stale["stale_reason"]
+            return stale
+
+        # ── Pick freshest top 5 by score ──────────────────────────────────
         stocks_data.sort(key=lambda x: x['profit_score'], reverse=True)
-        top5 = stocks_data[:5]
+        top5            = stocks_data[:5]
         current_symbols = [s['symbol'] for s in top5]
 
-        # ── Mark NEW entries ───────────────────────────────────────────────
+        # Mark NEW entries
         for s in top5:
             s['is_new'] = s['symbol'] not in _prev_top5
         _prev_top5 = current_symbols
 
-        # ── Update day-wise profit ─────────────────────────────────────────
+        # Update day-wise profit
         top5, day_total_profit = update_day_profit(today_date, top5)
 
         total_investment      = sum(s.get('investment', 0) for s in top5)
         total_expected_profit = sum(s.get('expected_profit', 0) for s in top5)
 
         result = {
-            "account":              client_id,
-            "api_key":              api_key[:4] + "***",
-            "timestamp":            now.strftime("%Y-%m-%d %H:%M:%S"),
-            "stocks_count":         len(stocks_data),
-            "stocks":               top5,
-            "status":               "success",
-            "note":                 "Top 5 freshly ranked by score on EVERY refresh",
-            "total_investment":     total_investment,
+            "account":               client_id,
+            "api_key":               api_key[:4] + "***",
+            "timestamp":             now.strftime("%Y-%m-%d %H:%M:%S"),
+            "stocks_count":          len(stocks_data),
+            "stocks":                top5,
+            "status":                "success",
+            "note":                  "Top 5 freshly ranked by score on EVERY refresh",
+            "total_investment":      total_investment,
             "total_expected_profit": total_expected_profit,
-            "day_total_profit":     day_total_profit,
-            "today":                today_date,
-            "refresh_interval":     _cache["ttl"],
+            "day_total_profit":      day_total_profit,
+            "today":                 today_date,
+            "refresh_interval":      _cache["ttl"],
+            "from_cache":            False,
+            "stale":                 False,
+            "stale_reason":          "",
+            "cache_age_secs":        0,
+            "partial_rate_limit":    rate_hit_any,   # some stocks skipped
         }
 
-        _cache["data"]      = result
-        _cache["timestamp"] = now
+        _cache["data"]         = result
+        _cache["timestamp"]    = now
+        _cache["stale"]        = False
+        _cache["stale_reason"] = ""
         return result
 
     except Exception as e:
-        return {"error": str(e), "stocks": []}
+        err_str = str(e)
+        if _is_rate_limit_error(err_str) and _cache["data"]:
+            stale = dict(_cache["data"])
+            stale["stale"]        = True
+            stale["stale_reason"] = f"Rate limit: {err_str[:120]}"
+            stale["from_cache"]   = True
+            _cache["stale"]       = True
+            _cache["stale_reason"] = stale["stale_reason"]
+            return stale
+        return {"error": err_str, "stocks": []}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -465,7 +619,43 @@ def get_html(stock_data):
     has_totp     = bool(os.environ.get("ANGEL_TOTP_SECRET"))
     all_configured = all([has_api_key, has_client, has_password, has_totp])
 
-    refresh_secs = stock_data.get("refresh_interval", 30)
+    refresh_secs = stock_data.get("refresh_interval", 300)
+
+    # ── Stale cache notice ──
+    is_stale      = stock_data.get("stale", False)
+    from_cache    = stock_data.get("from_cache", False)
+    cache_age     = stock_data.get("cache_age_secs", 0)
+    stale_reason  = stock_data.get("stale_reason", "")
+    partial_rl    = stock_data.get("partial_rate_limit", False)
+
+    cache_notice = ""
+    if is_stale and stale_reason:
+        mins = cache_age // 60; secs = cache_age % 60
+        age_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+        cache_notice = f'''
+        <div style="background:rgba(245,158,11,.15); border-left:4px solid #f59e0b;
+                    padding:10px 16px; border-radius:8px; margin:10px 0;
+                    color:#fbbf24; font-size:.88rem;">
+            ⚠️ <b>Using cached data</b> (age: {age_str}) — {stale_reason}<br>
+            <small style="color:#d97706;">Live data will resume once rate limit window clears (~1 min)</small>
+        </div>'''
+    elif from_cache and cache_age:
+        mins = cache_age // 60; secs = cache_age % 60
+        age_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+        cache_notice = f'''
+        <div style="background:rgba(6,182,212,.1); border-left:4px solid #06b6d4;
+                    padding:8px 14px; border-radius:8px; margin:10px 0;
+                    color:#67e8f9; font-size:.82rem;">
+            📦 Serving cached data (age: {age_str}) — next API call in {max(0, refresh_secs - cache_age)}s
+        </div>'''
+
+    if partial_rl:
+        cache_notice += '''
+        <div style="background:rgba(239,68,68,.1); border-left:4px solid #ef4444;
+                    padding:8px 14px; border-radius:8px; margin:8px 0;
+                    color:#fca5a5; font-size:.82rem;">
+            ⚡ Some stocks were skipped due to rate limits — showing available data only
+        </div>'''
 
     # ── Build stock rows ──
     stock_rows   = ""
@@ -606,7 +796,7 @@ def get_html(stock_data):
         err = stock_data.get("error", "Unknown error")
         if stock_data.get("import_errors"):
             err += "<br><small>" + "<br>".join(stock_data["import_errors"]) + "</small>"
-        status_msg = f'<div class="error-box">❌ {err}</div>'
+        status_msg = f'<div class="error-box">❌ {err}</div>{cache_notice}'
 
     elif stock_data.get("stocks"):
         ti  = stock_data.get("total_investment", 0)
@@ -617,10 +807,11 @@ def get_html(stock_data):
 
         status_msg = f'''
         <div class="success-box">
-            ✅ LIVE Fresh Top 5 — Angel One API • {stock_data.get("stocks_count", 0)} stocks scanned<br>
+            ✅ LIVE Fresh Top 5 Midcap Intraday — Angel One API • {stock_data.get("stocks_count", 0)} stocks scanned<br>
             Account: {stock_data.get("account", "N/A")} | API Key: {stock_data.get("api_key", "N/A")}<br>
             <small>📊 Multi-Indicator: RSI + EMA + VWAP + ADX + Volume + Momentum | Re-ranked every {refresh_secs}s</small>
         </div>
+        {cache_notice}
 
         <!-- Day Summary Box -->
         <div class="day-summary-box">
@@ -658,7 +849,7 @@ def get_html(stock_data):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Top 5 Live Picks — Fresh Every Refresh</title>
+    <title>Top 5 Midcap Intraday Picks — Live</title>
     <style>
         * {{ margin:0; padding:0; box-sizing:border-box; }}
         body {{
@@ -885,8 +1076,8 @@ def get_html(stock_data):
 <body>
 <div class="container">
 
-    <h1>📊 Live Stock Scanner — Fresh Top 5</h1>
-    <p class="subtitle">Best Buy System • RSI + EMA + VWAP + ADX + Volume + Momentum • Re-ranked every refresh</p>
+    <h1>📊 Top 5 Midcap Intraday Picks — Live</h1>
+    <p class="subtitle">High-Volume Midcap F&O • 20 Stocks Scanned • Best Buy System: RSI + EMA + VWAP + ADX + Volume + Momentum</p>
 
     <!-- Live Bar + Countdown -->
     <div class="live-bar">
