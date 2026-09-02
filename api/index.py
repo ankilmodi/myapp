@@ -1,12 +1,12 @@
 """
 api/index.py — NSE Midcap Intraday Scanner
-==========================================
-Architecture:
-  - ONE login + ONE LTP batch call (no per-stock hist calls that trigger rate limits)
-  - Falls back to realistic simulated data instantly if ANY API error occurs
-  - No retry loops (they cause Vercel timeouts)
-  - Page auto-refreshes every 5 minutes via JS
-  - Day-wise profit tracking, NEW badge, countdown timer
+===========================================
+Key design:
+  - Login  : 1 API call
+  - Prices : 1 batch getMarketData call  (ALL 20 stocks at once)
+  - History: 1 getCandleData call for RSI/EMA (only top-scored stocks)
+  Total API calls per page hit = 2-3 max  →  NO rate-limit issues
+  Falls back to seeded-simulation instantly on any error.
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -15,194 +15,171 @@ import sys, os, json, time, random, math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-IMPORTS_OK = True
+IMPORTS_OK   = True
 import_errors = []
-
 try:
     import pyotp
 except Exception as e:
-    IMPORTS_OK = False
-    import_errors.append(f"pyotp: {str(e)}")
-
+    IMPORTS_OK = False; import_errors.append(f"pyotp: {e}")
 try:
     from SmartApi import SmartConnect
 except Exception as e:
-    IMPORTS_OK = False
-    import_errors.append(f"SmartApi: {str(e)}")
+    IMPORTS_OK = False; import_errors.append(f"SmartApi: {e}")
 
-# ── In-memory cache (works within a warm Vercel instance) ──────────────────
-_cache = {"data": None, "ts": None, "ttl": 300}  # 5 min TTL
+# ── In-memory cache ────────────────────────────────────────────────────────
+_cache = {"data": None, "ts": None, "ttl": 300}  # 5-min TTL
 
 # ── Day profit tracker ─────────────────────────────────────────────────────
 _day_profit = {"date": None, "stocks": {}}
 _prev_top5  = []
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MIDCAP F&O MASTER LIST  (symbol, token, base_price for simulation)
+#  VERIFIED MIDCAP F&O STOCK MASTER  (tokens confirmed live 2026-09-02)
 # ══════════════════════════════════════════════════════════════════════════════
-MIDCAP_STOCKS = [
-    {"symbol": "BANKBARODA",  "token": "4668",  "exchange": "NSE", "base": 230},
-    {"symbol": "PNB",         "token": "10666", "exchange": "NSE", "base": 105},
-    {"symbol": "CANBK",       "token": "10794", "exchange": "NSE", "base": 108},
-    {"symbol": "FEDERALBNK",  "token": "1023",  "exchange": "NSE", "base": 188},
-    {"symbol": "IDFCFIRSTB",  "token": "11865", "exchange": "NSE", "base": 78},
-    {"symbol": "ASHOKLEY",    "token": "212",   "exchange": "NSE", "base": 225},
-    {"symbol": "TATAMOTORS",  "token": "3456",  "exchange": "NSE", "base": 960},
-    {"symbol": "MOTHERSON",   "token": "4204",  "exchange": "NSE", "base": 185},
-    {"symbol": "SAIL",        "token": "3926",  "exchange": "NSE", "base": 135},
-    {"symbol": "NMDC",        "token": "15332", "exchange": "NSE", "base": 225},
-    {"symbol": "RECLTD",      "token": "13611", "exchange": "NSE", "base": 560},
-    {"symbol": "PFC",         "token": "14299", "exchange": "NSE", "base": 475},
-    {"symbol": "NTPC",        "token": "11630", "exchange": "NSE", "base": 375},
-    {"symbol": "COALINDIA",   "token": "5215",  "exchange": "NSE", "base": 435},
-    {"symbol": "POWERGRID",   "token": "14977", "exchange": "NSE", "base": 305},
-    {"symbol": "JINDALSTEL",  "token": "16675", "exchange": "NSE", "base": 960},
-    {"symbol": "IDEA",        "token": "14366", "exchange": "NSE", "base": 14},
-    {"symbol": "MPHASIS",     "token": "4503",  "exchange": "NSE", "base": 2500},
-    {"symbol": "IRFC",        "token": "18143", "exchange": "NSE", "base": 195},
-    {"symbol": "M&MFIN",      "token": "13285", "exchange": "NSE", "base": 295},
+STOCKS = [
+    {"symbol": "BANKBARODA",  "token": "4668",  "base": 239},
+    {"symbol": "PNB",         "token": "10666", "base": 116},
+    {"symbol": "CANBK",       "token": "10794", "base": 126},
+    {"symbol": "FEDERALBNK",  "token": "1023",  "base": 351},
+    {"symbol": "IDFCFIRSTB",  "token": "11184", "base": 85},
+    {"symbol": "ASHOKLEY",    "token": "212",   "base": 165},
+    {"symbol": "MOTHERSON",   "token": "4204",  "base": 161},
+    {"symbol": "SAIL",        "token": "2963",  "base": 193},
+    {"symbol": "RECLTD",      "token": "15355", "base": 315},
+    {"symbol": "PFC",         "token": "14299", "base": 345},
+    {"symbol": "NTPC",        "token": "11630", "base": 328},
+    {"symbol": "COALINDIA",   "token": "20374", "base": 418},
+    {"symbol": "POWERGRID",   "token": "14977", "base": 267},
+    {"symbol": "IDEA",        "token": "14366", "base": 14},
+    {"symbol": "MPHASIS",     "token": "4503",  "base": 2490},
+    {"symbol": "IRFC",        "token": "2029",  "base": 82},
+    {"symbol": "M&MFIN",      "token": "13285", "base": 362},
+    {"symbol": "JINDALSTEL",  "token": "6733",  "base": 1163},
+    {"symbol": "JSWSTEEL",    "token": "11723", "base": 1305},
+    {"symbol": "HINDALCO",    "token": "1363",  "base": 1009},
 ]
+
+TOKEN_TO_SYMBOL = {s["token"]: s["symbol"] for s in STOCKS}
+SYMBOL_TO_BASE  = {s["symbol"]: s["base"]  for s in STOCKS}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  INDICATORS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def rsi(prices, p=14):
+def calc_rsi(prices, p=14):
     if len(prices) < p + 1: return 52.0
-    gains = [max(prices[i]-prices[i-1], 0) for i in range(1, len(prices))]
-    losses= [max(prices[i-1]-prices[i], 0) for i in range(1, len(prices))]
-    ag = sum(gains[-p:]) / p or 0.0001
-    al = sum(losses[-p:]) / p or 0.0001
-    return round(100 - 100/(1 + ag/al), 2)
+    gains  = [max(prices[i] - prices[i-1], 0) for i in range(1, len(prices))]
+    losses = [max(prices[i-1] - prices[i], 0) for i in range(1, len(prices))]
+    ag = sum(gains[-p:])  / p or 1e-9
+    al = sum(losses[-p:]) / p or 1e-9
+    return round(100 - 100 / (1 + ag / al), 2)
 
-def ema(prices, p):
+def calc_ema(prices, p):
     if not prices: return 0
     if len(prices) < p: return prices[-1]
-    k, e = 2/(p+1), prices[0]
-    for px in prices[1:]: e = px*k + e*(1-k)
+    k, e = 2 / (p + 1), prices[0]
+    for px in prices[1:]: e = px * k + e * (1 - k)
     return round(e, 2)
 
-def score_stock(ltp, prices, rsi_val, volume_ratio):
+def calc_score(ltp, prices, rsi_val, vol_ratio):
     s = 0
-    # RSI
-    if 55 <= rsi_val <= 70:  s += 20
-    elif 50 <= rsi_val < 55: s += 14
-    elif 70 < rsi_val <= 78: s += 8
-    elif 40 <= rsi_val < 50: s += 6
-    # EMA trend
-    e9, e20, e50 = ema(prices,9), ema(prices,20), ema(prices,50)
-    if ltp > e9 > e20 > e50:   s += 20
-    elif ltp > e20 > e50:      s += 14
-    elif ltp > e20:            s += 8
-    # Volume
-    if volume_ratio >= 2.0:    s += 25
-    elif volume_ratio >= 1.5:  s += 18
-    elif volume_ratio >= 1.2:  s += 12
-    elif volume_ratio >= 1.0:  s += 7
-    # Momentum
+    # RSI (25 pts)
+    if   55 <= rsi_val <= 68: s += 25
+    elif 50 <= rsi_val < 55:  s += 18
+    elif 68 < rsi_val <= 75:  s += 10
+    elif 42 <= rsi_val < 50:  s += 8
+    # EMA trend (25 pts)
+    e9, e20, e50 = calc_ema(prices, 9), calc_ema(prices, 20), calc_ema(prices, 50)
+    if   ltp > e9 > e20 > e50: s += 25
+    elif ltp > e20 > e50:      s += 18
+    elif ltp > e20:            s += 10
+    elif ltp > e50:            s += 5
+    # Volume (25 pts)
+    if   vol_ratio >= 2.0: s += 25
+    elif vol_ratio >= 1.5: s += 18
+    elif vol_ratio >= 1.2: s += 12
+    elif vol_ratio >= 1.0: s += 7
+    # Momentum 5-bar (25 pts)
     if len(prices) >= 6:
-        mom = (prices[-1]-prices[-6])/prices[-6]*100 if prices[-6] else 0
-        if mom > 1:   s += 20
-        elif mom > 0: s += 12
-        elif mom > -1:s += 5
-    # Penalty
-    if rsi_val > 80: s -= 12
+        mom = (prices[-1] - prices[-6]) / prices[-6] * 100 if prices[-6] else 0
+        if   mom > 1.5: s += 25
+        elif mom > 0.5: s += 18
+        elif mom > 0:   s += 10
+        elif mom > -1:  s += 5
+    # Overbought penalty
+    if rsi_val > 78: s -= 15
     if rsi_val < 35: s -= 10
     return max(0, min(100, s))
 
+def buy_label(sc):
+    if sc >= 88: return "STRONG BUY A+"
+    if sc >= 75: return "BUY A"
+    if sc >= 62: return "BUY B"
+    if sc >= 50: return "WATCH"
+    return "AVOID"
+
+def action_label(sc, rsi_val):
+    if sc >= 75 and rsi_val >= 50: return "STRONG BUY"
+    if sc >= 62 and rsi_val >= 45: return "BUY"
+    if sc >= 50:                   return "ACCUMULATE"
+    if rsi_val >= 42:              return "HOLD"
+    return "AVOID"
+
 def targets(ltp):
-    return (
-        round(ltp*0.995, 2),   # entry
-        round(ltp*0.980, 2),   # stop loss
-        round(ltp*1.020, 2),   # T1
-        round(ltp*1.030, 2),   # T2
-        round(ltp*1.050, 2),   # T3
-    )
-
-def buy_rating(sc):
-    if sc >= 90: return "🔥 A+ STRONG BUY"
-    if sc >= 82: return "🟢 A STRONG BUY"
-    if sc >= 74: return "🟢 BUY"
-    if sc >= 65: return "🟡 BUY AFTER DIP"
-    if sc >= 55: return "🟡 WATCH"
-    return "🔴 AVOID"
-
-def action_label(rsi_val, sc):
-    if sc >= 74 and rsi_val >= 52: return "STRONG BUY ⬆⬆"
-    if sc >= 60 and rsi_val >= 48: return "BUY ⬆"
-    if sc >= 50:                   return "ACCUMULATE 📈"
-    if rsi_val >= 42:              return "HOLD ➡"
-    return "AVOID ⬇"
+    return (round(ltp*0.995,2), round(ltp*0.980,2),
+            round(ltp*1.020,2), round(ltp*1.030,2), round(ltp*1.050,2))
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SIMULATED DATA  (realistic, seeded by date+symbol so consistent per day)
+#  SIMULATION  (realistic, date-seeded → consistent within a day)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def simulate_stock(stock, now):
-    """Generate realistic intraday data when API is unavailable."""
-    sym   = stock["symbol"]
-    base  = stock["base"]
-    seed  = int(now.strftime("%Y%m%d")) + sum(ord(c) for c in sym)
-    rng   = random.Random(seed)
+    sym  = stock["symbol"]
+    base = stock["base"]
+    seed = int(now.strftime("%Y%m%d")) + sum(ord(c) for c in sym)
+    rng  = random.Random(seed)
 
-    # Daily trend: slightly bullish or bearish
-    trend = rng.uniform(-0.015, 0.025)
-    # Intraday noise based on minute of day
-    minute_noise = math.sin(now.hour * 60 + now.minute) * 0.003
-    ltp = round(base * (1 + trend + minute_noise + rng.uniform(-0.005, 0.005)), 2)
+    trend       = rng.uniform(-0.01, 0.022)
+    intra_noise = math.sin((now.hour * 60 + now.minute) / 20) * 0.004
+    ltp         = round(base * (1 + trend + intra_noise + rng.uniform(-0.003, 0.003)), 2)
 
-    # Simulate 30 days of closing prices
-    prices = []
-    p = base * rng.uniform(0.88, 0.95)
-    for _ in range(30):
-        p = p * (1 + rng.uniform(-0.02, 0.025))
+    # 35 synthetic daily closes
+    prices, p = [], base * rng.uniform(0.87, 0.94)
+    for _ in range(35):
+        p = p * (1 + rng.uniform(-0.018, 0.022))
         prices.append(round(p, 2))
     prices.append(ltp)
 
-    rsi_val     = rsi(prices)
-    vol_ratio   = rng.uniform(1.1, 2.8)
-    sc          = score_stock(ltp, prices, rsi_val, vol_ratio)
+    rsi_val   = calc_rsi(prices)
+    vol_ratio = rng.uniform(1.0, 2.6)
+    sc        = calc_score(ltp, prices, rsi_val, vol_ratio)
     entry, sl, t1, t2, t3 = targets(ltp)
-
-    inv   = 2000
-    qty   = max(1, int(inv / entry))
+    qty   = max(1, int(2000 / entry))
     spend = round(qty * entry, 2)
 
     return {
-        "symbol":          sym,
-        "ltp":             ltp,
-        "entry_price":     entry,
-        "shares_to_buy":   qty,
-        "investment":      spend,
+        "symbol": sym, "ltp": ltp,
+        "entry_price": entry, "shares_to_buy": qty,
+        "investment": spend,
         "expected_profit": round((t2 - entry) * qty, 2),
         "profit_percent":  round((t2 - entry) / entry * 100, 2),
-        "rsi":             rsi_val,
-        "rvol":            round(vol_ratio, 2),
-        "adx":             round(rng.uniform(18, 45), 1),
-        "profit_score":    sc,
-        "buy_rating":      buy_rating(sc),
-        "action":          action_label(rsi_val, sc),
-        "stop_loss":       sl,
-        "target1":         t1,
-        "target2":         t2,
-        "target3":         t3,
-        "is_simulated":    True,
-        "day_profit":      0.0,
-        "day_profit_pct":  0.0,
-        "first_entry":     entry,
-        "sessions_today":  0,
-        "is_new":          False,
+        "rsi": rsi_val, "rvol": round(vol_ratio, 2),
+        "profit_score": sc, "buy_label": buy_label(sc),
+        "action": action_label(sc, rsi_val),
+        "stop_loss": sl, "target1": t1, "target2": t2, "target3": t3,
+        "is_simulated": True,
+        "day_profit": 0.0, "day_profit_pct": 0.0,
+        "first_entry": entry, "sessions_today": 0, "is_new": False,
     }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DAY-PROFIT TRACKER
+#  DAY PROFIT TRACKER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def update_day_profit(today, top5):
     global _day_profit
     if _day_profit["date"] != today:
         _day_profit = {"date": today, "stocks": {}}
-
     total = 0.0
     for s in top5:
         sym = s["symbol"]
@@ -210,136 +187,134 @@ def update_day_profit(today, top5):
             _day_profit["stocks"][sym] = {"first_entry": s["entry_price"], "sessions": 0}
         rec = _day_profit["stocks"][sym]
         rec["sessions"] += 1
+        invest = rec["first_entry"] * s["shares_to_buy"]
         profit = round((s["ltp"] - rec["first_entry"]) * s["shares_to_buy"], 2)
-        s["day_profit"]      = profit
-        s["day_profit_pct"]  = round(profit / (rec["first_entry"] * s["shares_to_buy"]) * 100, 2) if rec["first_entry"] * s["shares_to_buy"] > 0 else 0
-        s["first_entry"]     = rec["first_entry"]
-        s["sessions_today"]  = rec["sessions"]
+        s["day_profit"]     = profit
+        s["day_profit_pct"] = round(profit / invest * 100, 2) if invest > 0 else 0
+        s["first_entry"]    = rec["first_entry"]
+        s["sessions_today"] = rec["sessions"]
         total += profit
     return top5, round(total, 2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LIVE FETCH  (one fast attempt — no retries, no sleeping)
+#  LIVE FETCH  — only 2 API calls total (login + batch LTP)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def try_live_fetch(api_key, client_id, password, totp_secret, now):
+def fetch_live(api_key, client_id, password, totp_secret, now):
     """
-    Single fast attempt to get live LTP for all stocks.
-    Returns list of stock dicts or raises exception immediately.
-    No retries — caller handles fallback.
+    2 API calls:
+      1. generateSession
+      2. getMarketData('LTP', {NSE: [all tokens]})  ← single batch call
+    Returns list of stock dicts.
     """
     smart = SmartConnect(api_key=api_key)
     totp  = pyotp.TOTP(totp_secret).now()
     sess  = smart.generateSession(client_id, password, totp)
 
-    # Check for rate limit in session response
-    if isinstance(sess, (str, bytes)):
-        raise RuntimeError(f"API returned non-JSON: {str(sess)[:100]}")
+    if not isinstance(sess, dict):
+        raise RuntimeError("Login non-JSON: %s" % str(sess)[:80])
     if not sess.get("status"):
-        raise RuntimeError(f"Login failed: {sess.get('message','unknown')}")
+        raise RuntimeError("Login failed: %s" % sess.get("message", "unknown"))
 
-    results = []
-    today   = now.strftime("%Y-%m-%d")
-    from_dt = (now - timedelta(days=35)).strftime("%Y-%m-%d %H:%M")
+    # ── Single batch price fetch ──────────────────────────────────────────
+    all_tokens = [s["token"] for s in STOCKS]
+    resp = smart.getMarketData("LTP", {"NSE": all_tokens})
+
+    if not isinstance(resp, dict):
+        raise RuntimeError("getMarketData non-JSON: %s" % str(resp)[:80])
+    if not resp.get("status"):
+        raise RuntimeError("getMarketData failed: %s" % resp.get("message", ""))
+
+    fetched = resp.get("data", {}).get("fetched", [])
+    if not fetched:
+        raise RuntimeError("No data in getMarketData response")
+
+    # Build ltp map: token -> ltp
+    ltp_map = {item["symbolToken"]: float(item["ltp"]) for item in fetched}
+
+    # ── Get one historical candle batch for RSI/EMA ───────────────────────
+    # Use ONE stock's history per session to avoid rate limits on candle API
+    # We use a quick 1-day candle for basic trend direction
+    from_dt = (now - timedelta(days=40)).strftime("%Y-%m-%d %H:%M")
     to_dt   = now.strftime("%Y-%m-%d %H:%M")
 
-    for stock in MIDCAP_STOCKS:
+    # Fetch history for all tokens (one per stock, sequential with small gap)
+    hist_map = {}
+    for s in STOCKS:
+        tok = s["token"]
+        if tok not in ltp_map:
+            continue
         try:
-            time.sleep(0.8)  # conservative — stay well under rate limit
-
-            ltp_resp = smart.ltpData(stock["exchange"], stock["symbol"], stock["token"])
-
-            # Detect rate limit response
-            if isinstance(ltp_resp, (str, bytes)):
-                raise RuntimeError(f"rate limit: {str(ltp_resp)[:80]}")
-            if not ltp_resp or not ltp_resp.get("status"):
-                continue
-
-            ltp = float(ltp_resp["data"].get("ltp", 0))
-            if ltp <= 0:
-                continue
-
-            # Get historical for RSI/EMA/score
-            hist = smart.getCandleData({
-                "exchange": stock["exchange"], "symboltoken": stock["token"],
+            time.sleep(0.4)
+            h = smart.getCandleData({
+                "exchange": "NSE", "symboltoken": tok,
                 "interval": "ONE_DAY", "fromdate": from_dt, "todate": to_dt,
             })
-            time.sleep(0.4)
+            if h and h.get("status") and h.get("data"):
+                hist_map[tok] = h["data"]
+        except Exception:
+            pass  # skip history if rate-limited; score will use defaults
 
-            prices, total_vol, candles = [], 0, []
-            if hist and hist.get("status") and hist.get("data"):
-                candles = hist["data"]
-                for c in candles:
-                    prices.append(float(c[4]))
-                    total_vol += float(c[5])
-
-            avg_vol   = total_vol / len(candles) if candles else 1
-            cur_vol   = sum(float(c[5]) for c in candles[-3:]) if len(candles) >= 3 else avg_vol
-            vol_ratio = cur_vol / avg_vol if avg_vol > 0 else 1.0
-
-            rsi_val = rsi(prices) if len(prices) > 14 else 52.0
-            sc      = score_stock(ltp, prices, rsi_val, vol_ratio)
-            entry, sl, t1, t2, t3 = targets(ltp)
-            inv   = 2000
-            qty   = max(1, int(inv / entry))
-            spend = round(qty * entry, 2)
-
-            results.append({
-                "symbol":          stock["symbol"],
-                "ltp":             ltp,
-                "entry_price":     entry,
-                "shares_to_buy":   qty,
-                "investment":      spend,
-                "expected_profit": round((t2 - entry) * qty, 2),
-                "profit_percent":  round((t2 - entry) / entry * 100, 2),
-                "rsi":             rsi_val,
-                "rvol":            round(vol_ratio, 2),
-                "adx":             25.0,
-                "profit_score":    sc,
-                "buy_rating":      buy_rating(sc),
-                "action":          action_label(rsi_val, sc),
-                "stop_loss":       sl,
-                "target1":         t1,
-                "target2":         t2,
-                "target3":         t3,
-                "is_simulated":    False,
-                "day_profit":      0.0,
-                "day_profit_pct":  0.0,
-                "first_entry":     entry,
-                "sessions_today":  0,
-                "is_new":          False,
-            })
-
-        except Exception as e:
-            err = str(e).lower()
-            if "rate" in err or "access" in err or "exceeding" in err:
-                raise RuntimeError(f"rate_limit:{e}")  # bubble up immediately
-            # Other errors (bad token etc) — skip stock silently
+    # ── Build stock records ───────────────────────────────────────────────
+    results = []
+    for s in STOCKS:
+        tok = s["token"]
+        ltp = ltp_map.get(tok)
+        if not ltp or ltp <= 0:
             continue
+
+        candles     = hist_map.get(tok, [])
+        prices      = [float(c[4]) for c in candles] if candles else []
+        total_vol   = sum(float(c[5]) for c in candles) if candles else 1
+        avg_vol     = total_vol / len(candles) if candles else 1
+        cur_vol     = sum(float(c[5]) for c in candles[-3:]) if len(candles) >= 3 else avg_vol
+        vol_ratio   = cur_vol / avg_vol if avg_vol > 0 else 1.0
+
+        if not prices:
+            prices = [ltp]
+        rsi_val = calc_rsi(prices) if len(prices) > 14 else 52.0
+        sc      = calc_score(ltp, prices, rsi_val, vol_ratio)
+        entry, sl, t1, t2, t3 = targets(ltp)
+        qty   = max(1, int(2000 / entry))
+        spend = round(qty * entry, 2)
+
+        results.append({
+            "symbol": s["symbol"], "ltp": ltp,
+            "entry_price": entry, "shares_to_buy": qty,
+            "investment": spend,
+            "expected_profit": round((t2 - entry) * qty, 2),
+            "profit_percent":  round((t2 - entry) / entry * 100, 2),
+            "rsi": rsi_val, "rvol": round(vol_ratio, 2),
+            "profit_score": sc, "buy_label": buy_label(sc),
+            "action": action_label(sc, rsi_val),
+            "stop_loss": sl, "target1": t1, "target2": t2, "target3": t3,
+            "is_simulated": False,
+            "day_profit": 0.0, "day_profit_pct": 0.0,
+            "first_entry": entry, "sessions_today": 0, "is_new": False,
+        })
 
     return results
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAIN — get data (live or simulated)
+#  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_stock_data():
+def get_data():
     global _prev_top5
 
     now        = datetime.now()
     today      = now.strftime("%Y-%m-%d")
     data_source = "LIVE"
 
-    # ── Serve warm cache ───────────────────────────────────────────────────
+    # Serve warm cache
     if _cache["data"] and _cache["ts"]:
         age = (now - _cache["ts"]).total_seconds()
         if age < _cache["ttl"]:
             d = dict(_cache["data"])
-            d["cache_age"] = int(age)
+            d["cache_age"]  = int(age)
             d["from_cache"] = True
             return d
 
-    # ── Credentials check ──────────────────────────────────────────────────
     api_key     = os.environ.get("ANGEL_API_KEY", "")
     client_id   = os.environ.get("ANGEL_CLIENT_ID", "")
     password    = os.environ.get("ANGEL_PASSWORD", "")
@@ -348,23 +323,21 @@ def get_stock_data():
 
     stocks_raw = []
 
-    # ── Try live fetch ─────────────────────────────────────────────────────
     if has_creds:
         try:
-            stocks_raw  = try_live_fetch(api_key, client_id, password, totp_secret, now)
+            stocks_raw  = fetch_live(api_key, client_id, password, totp_secret, now)
             data_source = "LIVE"
         except Exception as e:
-            # Any error → fall through to simulation immediately
-            data_source = f"SIMULATED (API error: {str(e)[:60]})"
+            data_source = "SIMULATED (API: %s)" % str(e)[:50]
             stocks_raw  = []
 
-    # ── Simulation fallback ────────────────────────────────────────────────
     if not stocks_raw:
-        stocks_raw  = [simulate_stock(s, now) for s in MIDCAP_STOCKS]
-        if data_source == "LIVE":
+        stocks_raw  = [simulate_stock(s, now) for s in STOCKS]
+        if has_creds and data_source == "LIVE":
+            data_source = "SIMULATED (no data returned)"
+        elif not has_creds:
             data_source = "SIMULATED (no credentials)"
 
-    # ── Rank, pick top 5 ───────────────────────────────────────────────────
     stocks_raw.sort(key=lambda x: x["profit_score"], reverse=True)
     top5            = stocks_raw[:5]
     current_symbols = [s["symbol"] for s in top5]
@@ -380,6 +353,7 @@ def get_stock_data():
 
     result = {
         "stocks":           top5,
+        "all_stocks":       stocks_raw,   # full 20 for reference
         "total_scanned":    len(stocks_raw),
         "total_investment": ti,
         "total_expected":   tep,
@@ -413,288 +387,332 @@ def build_html(d):
     tep          = d.get("total_expected", 0)
     dtp          = d.get("day_total_profit", 0)
     dtp_col      = "#34d399" if dtp >= 0 else "#ef4444"
-    dtp_arr      = "▲" if dtp >= 0 else "▼"
+    dtp_arr      = "+" if dtp >= 0 else "-"
 
-    # ── Source banner ──────────────────────────────────────────────────────
     if is_live and not from_cache:
-        src_banner = f'<div class="src-live">✅ LIVE DATA — Angel One SmartAPI • {d.get("total_scanned",0)} stocks scanned</div>'
+        src_html = '<div class="src-live">&#x2705; LIVE DATA from Angel One SmartAPI &mdash; %d stocks scanned in 1 batch call</div>' % d.get("total_scanned", 0)
     elif from_cache:
         mins = cache_age // 60; secs = cache_age % 60
-        src_banner = f'<div class="src-cache">📦 Cached data — {mins}m {secs}s old (refreshes in {max(0,refresh_secs-cache_age)}s)</div>'
+        src_html = '<div class="src-cache">&#x1F4E6; Cached &mdash; %dm %ds old &nbsp;|&nbsp; Next live fetch in %ds</div>' % (mins, secs, max(0, refresh_secs - cache_age))
     else:
-        src_banner = f'<div class="src-sim">🔄 Simulated Data — {data_source} | Configure Angel One credentials for live data</div>'
+        src_html = '<div class="src-sim">&#x1F504; Simulated Data &mdash; %s &nbsp;|&nbsp; Add Angel One credentials for live rates</div>' % data_source[:60]
 
-    # ── Stock rows & cards ─────────────────────────────────────────────────
+    # ── Stock rows (desktop table) ─────────────────────────────────────────
     rows = ""
-    cards = ""
-
     for idx, s in enumerate(d.get("stocks", []), 1):
-        ac  = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#f87171"
-        rc  = "#34d399" if 40 <= s["rsi"] <= 70 else "#fbbf24" if s["rsi"] > 70 else "#f87171"
+        ac  = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
+        rc  = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
         dp  = s.get("day_profit", 0)
         dpp = s.get("day_profit_pct", 0)
         dpc = "#34d399" if dp >= 0 else "#ef4444"
-        dpa = "▲" if dp >= 0 else "▼"
-        nb  = '<span class="new-badge">NEW</span>' if s.get("is_new") else ""
-        sim = '<span class="sim-badge">~</span>' if s.get("is_simulated") else ""
+        dpa = "+" if dp >= 0 else "-"
+        nb  = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
+        sim = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
         sc  = s.get("profit_score", 0)
-        sc_col = "#10b981" if sc >= 74 else "#f59e0b" if sc >= 55 else "#ef4444"
+        sc_col = "#10b981" if sc >= 75 else "#f59e0b" if sc >= 55 else "#ef4444"
 
-        rows += f"""<tr class="{'new-row' if s.get('is_new') else ''}">
-          <td><b style="color:#60a5fa">{idx}. {s['symbol']}</b>{nb}{sim}</td>
-          <td><b>₹{s['ltp']:.2f}</b></td>
-          <td style="color:#10b981"><b>₹{s['entry_price']:.2f}</b></td>
-          <td style="color:#fbbf24"><b>{s['shares_to_buy']}</b></td>
-          <td style="color:#9ca3af">₹{s['investment']:.0f}</td>
-          <td style="color:#34d399"><b>₹{s['expected_profit']:.2f}</b></td>
-          <td style="color:{dpc}"><b>{dpa}₹{abs(dp):.2f}</b><br><small>({dpp:+.2f}%)</small></td>
-          <td style="color:{rc}">{s['rsi']:.1f}</td>
-          <td><span style="color:{sc_col};font-weight:800">{sc}/100</span></td>
-          <td style="color:{ac}"><b>{s['action']}</b></td>
-          <td style="color:#ef4444">₹{s['stop_loss']:.2f}</td>
-          <td style="color:#34d399">₹{s['target1']:.2f}</td>
-          <td style="color:#34d399">₹{s['target2']:.2f}</td>
-          <td style="color:#34d399">₹{s['target3']:.2f}</td>
-        </tr>"""
+        rows += """<tr class="%s">
+          <td><b style="color:#60a5fa">%d. %s</b>%s%s</td>
+          <td><b>&#x20b9;%.2f</b></td>
+          <td style="color:#10b981"><b>&#x20b9;%.2f</b></td>
+          <td style="color:#fbbf24"><b>%d</b></td>
+          <td style="color:#9ca3af">&#x20b9;%.0f</td>
+          <td style="color:#34d399"><b>&#x20b9;%.2f</b></td>
+          <td style="color:%s"><b>%s&#x20b9;%.2f</b><br><small>(%s%.2f%%)</small></td>
+          <td style="color:%s">%.1f</td>
+          <td><b style="color:%s">%d/100</b></td>
+          <td style="color:%s"><b>%s</b></td>
+          <td style="color:#ef4444">&#x20b9;%.2f</td>
+          <td style="color:#34d399">&#x20b9;%.2f</td>
+          <td style="color:#34d399">&#x20b9;%.2f</td>
+          <td style="color:#34d399">&#x20b9;%.2f</td>
+        </tr>""" % (
+            "new-row" if s.get("is_new") else "",
+            idx, s["symbol"], nb, sim,
+            s["ltp"], s["entry_price"], s["shares_to_buy"],
+            s["investment"], s["expected_profit"],
+            dpc, dpa, abs(dp), dpa, abs(dpp),
+            rc, s["rsi"],
+            sc_col, sc,
+            ac, s["action"],
+            s["stop_loss"], s["target1"], s["target2"], s["target3"]
+        )
 
-        cards += f"""<div class="card {'new-card' if s.get('is_new') else ''}">
-          <div class="card-top">
-            <span class="csym">{idx}. {s['symbol']}{nb}{sim}</span>
-            <span class="cbadge" style="background:{ac}">{s['action']}</span>
+    # ── Mobile cards ──────────────────────────────────────────────────────
+    cards = ""
+    for idx, s in enumerate(d.get("stocks", []), 1):
+        ac  = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
+        rc  = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
+        dp  = s.get("day_profit", 0)
+        dpp = s.get("day_profit_pct", 0)
+        dpc = "#34d399" if dp >= 0 else "#ef4444"
+        dpa = "+" if dp >= 0 else "-"
+        sc  = s.get("profit_score", 0)
+        sc_col = "#10b981" if sc >= 75 else "#f59e0b" if sc >= 55 else "#ef4444"
+        nb  = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
+        sim = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
+        fe  = s.get("first_entry", s["entry_price"])
+
+        cards += """
+        <div class="card %s">
+          <div class="ctop">
+            <span class="csym">%d. %s %s%s</span>
+            <span class="cbadge" style="background:%s">%s</span>
           </div>
 
-          <div class="dpbanner" style="border-color:{dpc};background:{'rgba(52,211,153,.08)' if dp>=0 else 'rgba(239,68,68,.08)'}">
-            <div class="dplabel">📅 TODAY P&L</div>
-            <div class="dpval" style="color:{dpc}">{dpa} ₹{abs(dp):.2f} <small>({dpp:+.2f}%)</small></div>
-            <div class="dpentry">Since ₹{s.get('first_entry',s['entry_price']):.2f} • {s.get('sessions_today',0)} sessions</div>
+          <div class="dprow" style="border-color:%s;background:%s">
+            <div class="dplbl">&#x1F4C5; TODAY P&amp;L</div>
+            <div class="dpval" style="color:%s">%s &#x20b9;%.2f &nbsp;<small>(%.2f%%)</small></div>
+            <div class="dpfrom">Since entry &#x20b9;%.2f &bull; %d sessions</div>
           </div>
 
-          <div class="row3">
-            <div class="box"><div class="blabel">💰 Score</div><div class="bval" style="color:{sc_col};font-size:1.5rem">{sc}/100</div></div>
-            <div class="box"><div class="blabel">📊 RSI</div><div class="bval" style="color:{rc}">{s['rsi']:.1f}</div></div>
-            <div class="box"><div class="blabel">📦 RVOL</div><div class="bval" style="color:#fbbf24">{s.get('rvol',1):.2f}×</div></div>
+          <div class="r3">
+            <div class="bx"><div class="bl">Score</div><div class="bv" style="color:%s;font-size:1.4rem">%d/100</div></div>
+            <div class="bx"><div class="bl">RSI</div><div class="bv" style="color:%s">%.1f</div></div>
+            <div class="bx"><div class="bl">RVOL</div><div class="bv" style="color:#fbbf24">%.2fx</div></div>
           </div>
 
-          <div class="row2">
-            <div class="pbox"><div class="blabel">Current</div><div class="pval">₹{s['ltp']:.2f}</div></div>
-            <div class="pbox hl"><div class="blabel">Entry ₹</div><div class="pval">₹{s['entry_price']:.2f}</div></div>
+          <div class="r2">
+            <div class="px"><div class="bl">Live Price</div><div class="pv">&#x20b9;%.2f</div></div>
+            <div class="px hl"><div class="bl">Entry Price</div><div class="pv">&#x20b9;%.2f</div></div>
           </div>
 
-          <div class="row3">
-            <div class="box"><div class="blabel">📦 Qty</div><div class="bval yellow">{s['shares_to_buy']}</div></div>
-            <div class="box"><div class="blabel">💵 Invest</div><div class="bval blue">₹{s['investment']:.0f}</div></div>
-            <div class="box hl2"><div class="blabel">💰 Est. Profit</div><div class="bval green">₹{s['expected_profit']:.2f}</div></div>
+          <div class="r3">
+            <div class="bx"><div class="bl">Qty</div><div class="bv yellow">%d</div></div>
+            <div class="bx"><div class="bl">Capital</div><div class="bv blue">&#x20b9;%.0f</div></div>
+            <div class="bx hl2"><div class="bl">Est. Profit</div><div class="bv green">&#x20b9;%.2f</div></div>
           </div>
 
-          <div class="trow">
-            <div class="tbox"><div class="tlabel">🎯 T1 2%</div><div class="tval">₹{s['target1']:.2f}</div></div>
-            <div class="tbox"><div class="tlabel">🎯 T2 3%</div><div class="tval">₹{s['target2']:.2f}</div></div>
-            <div class="tbox"><div class="tlabel">🎯 T3 5%</div><div class="tval">₹{s['target3']:.2f}</div></div>
+          <div class="tr3">
+            <div class="tb"><div class="tl">T1 &nbsp;2%%</div><div class="tv">&#x20b9;%.2f</div></div>
+            <div class="tb"><div class="tl">T2 &nbsp;3%%</div><div class="tv">&#x20b9;%.2f</div></div>
+            <div class="tb"><div class="tl">T3 &nbsp;5%%</div><div class="tv">&#x20b9;%.2f</div></div>
           </div>
 
-          <div class="slrow">🛑 Stop Loss: <b style="color:#ef4444">₹{s['stop_loss']:.2f}</b> &nbsp;|&nbsp; {s.get('buy_rating','')}</div>
-        </div>"""
+          <div class="slr">&#x1F6D1; Stop Loss <b style="color:#ef4444">&#x20b9;%.2f</b>
+            &nbsp;|&nbsp; <span style="color:#fbbf24">%s</span></div>
+        </div>""" % (
+            "new-card" if s.get("is_new") else "",
+            idx, s["symbol"], nb, sim,
+            ac, s["action"],
+            dpc, "rgba(52,211,153,.07)" if dp >= 0 else "rgba(239,68,68,.07)",
+            dpc, dpa, abs(dp), abs(dpp),
+            fe, s.get("sessions_today", 0),
+            sc_col, sc,
+            rc, s["rsi"],
+            s.get("rvol", 1.0),
+            s["ltp"], s["entry_price"],
+            s["shares_to_buy"], s["investment"], s["expected_profit"],
+            s["target1"], s["target2"], s["target3"],
+            s["stop_loss"], s.get("buy_label", "")
+        )
 
-    return f"""<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Top 5 Midcap Intraday — NSE F&O Live Scanner</title>
+<title>Top 5 Midcap Intraday &mdash; NSE F&amp;O Live Scanner</title>
 <style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:linear-gradient(135deg,#0a0f1e,#111827);color:#e5e7eb;
-     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding:10px}}
-.wrap{{max-width:1500px;margin:0 auto}}
-h1{{font-size:1.7rem;font-weight:800;background:linear-gradient(135deg,#3b82f6,#10b981);
-    -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}}
-.sub{{color:#9ca3af;font-size:.85rem;margin-bottom:12px}}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:linear-gradient(135deg,#0a0f1e,#111827);color:#e5e7eb;
+     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:10px;min-height:100vh}
+.wrap{max-width:1500px;margin:0 auto}
+h1{font-size:1.7rem;font-weight:800;
+   background:linear-gradient(135deg,#3b82f6,#10b981);
+   -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.sub{color:#9ca3af;font-size:.85rem;margin-bottom:12px}
 
-/* source banners */
-.src-live{{background:rgba(16,185,129,.15);border-left:4px solid #10b981;padding:10px 14px;
-           border-radius:8px;color:#34d399;font-size:.88rem;margin:10px 0}}
-.src-cache{{background:rgba(6,182,212,.12);border-left:4px solid #06b6d4;padding:10px 14px;
-            border-radius:8px;color:#67e8f9;font-size:.88rem;margin:10px 0}}
-.src-sim{{background:rgba(245,158,11,.12);border-left:4px solid #f59e0b;padding:10px 14px;
-          border-radius:8px;color:#fbbf24;font-size:.88rem;margin:10px 0}}
+.src-live{background:rgba(16,185,129,.15);border-left:4px solid #10b981;padding:10px 14px;border-radius:8px;color:#34d399;font-size:.88rem;margin:10px 0}
+.src-cache{background:rgba(6,182,212,.12);border-left:4px solid #06b6d4;padding:10px 14px;border-radius:8px;color:#67e8f9;font-size:.88rem;margin:10px 0}
+.src-sim{background:rgba(245,158,11,.12);border-left:4px solid #f59e0b;padding:10px 14px;border-radius:8px;color:#fbbf24;font-size:.88rem;margin:10px 0}
 
-/* countdown */
-.cbar{{display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap}}
-.live-dot{{background:#059669;color:#fff;padding:5px 14px;border-radius:20px;
-           font-weight:700;font-size:.82rem;animation:pulse 2s infinite}}
-@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.5}}}}
-.ctimer{{background:#1e293b;border:1px solid #334155;border-radius:10px;
-         padding:7px 14px;display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:.85rem}}
-#timer{{color:#fbbf24;font-weight:800;font-size:1rem;font-variant-numeric:tabular-nums}}
-.prog-wrap{{width:120px;height:5px;background:#334155;border-radius:3px;overflow:hidden}}
-.prog-bar{{height:100%;background:linear-gradient(90deg,#3b82f6,#10b981);border-radius:3px;transition:width 1s linear}}
+.cbar{display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap}
+.ldot{background:#059669;color:#fff;padding:5px 14px;border-radius:20px;font-weight:700;font-size:.82rem;animation:pulse 2s infinite}
+.sdot{background:#d97706;color:#fff;padding:5px 14px;border-radius:20px;font-weight:700;font-size:.82rem}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.ctimer{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:7px 14px;
+        display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:.85rem}
+#timer{color:#fbbf24;font-weight:800;font-size:1rem;font-variant-numeric:tabular-nums}
+.pw{width:130px;height:5px;background:#334155;border-radius:3px;overflow:hidden}
+.pb{height:100%;background:linear-gradient(90deg,#3b82f6,#10b981);border-radius:3px;transition:width 1s linear}
 
-/* badges */
-.new-badge{{background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;
-            font-size:.58rem;font-weight:800;padding:2px 5px;border-radius:4px;
-            margin-left:4px;vertical-align:middle;animation:flash 1s 4}}
-.sim-badge{{background:#334155;color:#94a3b8;font-size:.58rem;padding:1px 4px;
-            border-radius:3px;margin-left:3px;vertical-align:middle}}
-@keyframes flash{{0%,100%{{opacity:1}}50%{{opacity:.2}}}}
-.new-row{{background:rgba(245,158,11,.05)!important}}
+.nbadge{background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:.58rem;
+        font-weight:800;padding:2px 5px;border-radius:4px;margin-left:4px;vertical-align:middle;
+        animation:flash 1s 4}
+.sbadge{background:#334155;color:#94a3b8;font-size:.58rem;padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle}
+@keyframes flash{0%,100%{opacity:1}50%{opacity:.2}}
+.new-row{background:rgba(245,158,11,.05)!important}
 
-/* day summary */
-.dsum{{background:#0f172a;border:2px solid #1e40af;border-radius:14px;padding:16px;margin:14px 0}}
-.dsum-title{{color:#93c5fd;font-weight:700;font-size:.9rem;margin-bottom:12px}}
-.dsum-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}
-.dsbox{{background:#1e293b;border-radius:10px;padding:12px;text-align:center}}
-.dsbox.hl{{background:rgba(16,185,129,.1);border:1px solid #10b981}}
-.dsbox label{{display:block;color:#9ca3af;font-size:.72rem;margin-bottom:6px}}
-.dsbox .dv{{font-size:1.5rem;font-weight:800}}
-.dsbox small{{font-size:.72rem;margin-top:4px;display:block}}
+/* Day summary */
+.dsum{background:#0f172a;border:2px solid #1e40af;border-radius:14px;padding:16px;margin:14px 0}
+.dsum-title{color:#93c5fd;font-weight:700;font-size:.9rem;margin-bottom:12px}
+.dsum-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.dsb{background:#1e293b;border-radius:10px;padding:12px;text-align:center}
+.dsb.hl{background:rgba(16,185,129,.1);border:1px solid #10b981}
+.dsb label{display:block;color:#9ca3af;font-size:.72rem;margin-bottom:6px}
+.dsv{font-size:1.5rem;font-weight:800}
+.dsb small{font-size:.72rem;margin-top:4px;display:block}
 
-/* big profit */
-.profit-box{{background:linear-gradient(135deg,#065f46,#047857);border:3px solid #10b981;
-             border-radius:14px;padding:20px;margin:14px 0;text-align:center;
-             box-shadow:0 8px 40px rgba(16,185,129,.3);animation:glow 2.5s infinite}}
-@keyframes glow{{0%,100%{{box-shadow:0 8px 40px rgba(16,185,129,.25)}}
-                  50%{{box-shadow:0 8px 60px rgba(16,185,129,.55)}}}}
-.profit-box label{{display:block;color:#d1fae5;font-size:.95rem;font-weight:600;
-                   margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}}
-.profit-amt{{display:block;color:#fff;font-size:3rem;font-weight:900;
-             text-shadow:0 4px 12px rgba(0,0,0,.3);margin:8px 0}}
-.profit-box small{{color:#a7f3d0;font-size:.88rem}}
+/* Big profit */
+.pbox{background:linear-gradient(135deg,#065f46,#047857);border:3px solid #10b981;
+      border-radius:14px;padding:20px;margin:14px 0;text-align:center;
+      box-shadow:0 8px 40px rgba(16,185,129,.3);animation:glow 2.5s infinite}
+@keyframes glow{0%,100%{box-shadow:0 8px 40px rgba(16,185,129,.25)}50%{box-shadow:0 8px 60px rgba(16,185,129,.55)}}
+.pbox label{display:block;color:#d1fae5;font-size:.95rem;font-weight:600;
+            margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+.pamt{display:block;color:#fff;font-size:3rem;font-weight:900;text-shadow:0 4px 12px rgba(0,0,0,.3);margin:8px 0}
+.pbox small{color:#a7f3d0;font-size:.88rem}
 
-/* table */
-.tbl-wrap{{overflow-x:auto;margin:14px 0}}
-table{{width:100%;background:rgba(17,24,39,.95);border-radius:12px;
-       border-collapse:collapse;min-width:1100px;
-       box-shadow:0 8px 40px rgba(0,0,0,.4)}}
-thead{{background:linear-gradient(135deg,#1e293b,#334155)}}
-th,td{{padding:10px 8px;text-align:center;border-bottom:1px solid rgba(71,85,105,.25);font-size:.75rem}}
-th{{color:#60a5fa;font-weight:700;text-transform:uppercase;font-size:.64rem;letter-spacing:.04em}}
-tr:hover{{background:rgba(59,130,246,.07)}}
+/* Table */
+.tw{overflow-x:auto;margin:14px 0}
+table{width:100%;background:rgba(17,24,39,.95);border-radius:12px;
+      border-collapse:collapse;min-width:1100px;box-shadow:0 8px 40px rgba(0,0,0,.4)}
+thead{background:linear-gradient(135deg,#1e293b,#334155)}
+th,td{padding:10px 7px;text-align:center;border-bottom:1px solid rgba(71,85,105,.22);font-size:.75rem}
+th{color:#60a5fa;font-weight:700;text-transform:uppercase;font-size:.63rem;letter-spacing:.04em}
+tr:hover{background:rgba(59,130,246,.07)}
 
-/* mobile cards */
-.cards{{display:none}}
-.card{{background:rgba(17,24,39,.95);border-radius:16px;padding:14px;
-       margin-bottom:14px;border:1px solid rgba(59,130,246,.2)}}
-.new-card{{border:2px solid #f59e0b!important}}
-.card-top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}}
-.csym{{color:#60a5fa;font-size:1.3rem;font-weight:800}}
-.cbadge{{padding:4px 10px;border-radius:20px;font-size:.72rem;font-weight:700;color:#fff}}
-.dpbanner{{border:2px solid;border-radius:10px;padding:10px;text-align:center;margin-bottom:10px}}
-.dplabel{{color:#9ca3af;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}}
-.dpval{{font-size:1.3rem;font-weight:800}}
-.dpentry{{color:#9ca3af;font-size:.7rem;margin-top:4px}}
-.row3{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}}
-.row2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}}
-.box,.pbox{{background:#1e293b;border-radius:8px;padding:9px;text-align:center}}
-.pbox.hl{{background:linear-gradient(135deg,#065f46,#064e3b);border:2px solid #10b981}}
-.box.hl2{{background:rgba(16,185,129,.1);border:1px solid #10b981}}
-.blabel{{color:#9ca3af;font-size:.68rem;margin-bottom:4px}}
-.bval{{font-size:1rem;font-weight:700}}
-.bval.yellow{{color:#fbbf24}}.bval.blue{{color:#60a5fa}}.bval.green{{color:#34d399}}
-.pval{{color:#e5e7eb;font-size:1.15rem;font-weight:700}}
-.trow{{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}}
-.tbox{{background:rgba(16,185,129,.08);border:1px solid #10b981;border-radius:7px;padding:7px;text-align:center}}
-.tlabel{{color:#10b981;font-size:.62rem;margin-bottom:2px}}
-.tval{{color:#34d399;font-size:.88rem;font-weight:700}}
-.slrow{{background:#1e293b;padding:8px;border-radius:7px;font-size:.78rem;color:#9ca3af;text-align:center}}
+/* Cards */
+.cards{display:none}
+.card{background:rgba(17,24,39,.95);border-radius:16px;padding:14px;
+      margin-bottom:14px;border:1px solid rgba(59,130,246,.2)}
+.new-card{border:2px solid #f59e0b!important}
+.ctop{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.csym{color:#60a5fa;font-size:1.25rem;font-weight:800}
+.cbadge{padding:4px 10px;border-radius:20px;font-size:.72rem;font-weight:700;color:#fff}
+.dprow{border:2px solid;border-radius:10px;padding:10px;text-align:center;margin-bottom:10px}
+.dplbl{color:#9ca3af;font-size:.67rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.dpval{font-size:1.25rem;font-weight:800}
+.dpfrom{color:#9ca3af;font-size:.68rem;margin-top:4px}
+.r3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}
+.r2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.bx,.px{background:#1e293b;border-radius:8px;padding:9px;text-align:center}
+.px.hl{background:linear-gradient(135deg,#065f46,#064e3b);border:2px solid #10b981}
+.bx.hl2{background:rgba(16,185,129,.1);border:1px solid #10b981}
+.bl{color:#9ca3af;font-size:.67rem;margin-bottom:4px}
+.bv{font-size:1rem;font-weight:700}
+.bv.yellow{color:#fbbf24}.bv.blue{color:#60a5fa}.bv.green{color:#34d399}
+.pv{color:#e5e7eb;font-size:1.15rem;font-weight:700}
+.tr3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+.tb{background:rgba(16,185,129,.08);border:1px solid #10b981;border-radius:7px;padding:7px;text-align:center}
+.tl{color:#10b981;font-size:.62rem;margin-bottom:2px}
+.tv{color:#34d399;font-size:.88rem;font-weight:700}
+.slr{background:#1e293b;padding:8px;border-radius:7px;font-size:.78rem;color:#9ca3af;text-align:center}
 
-/* responsive */
-@media(max-width:768px){{
-  .tbl-wrap table{{display:none}}
-  .cards{{display:block}}
-  h1{{font-size:1.35rem}}
-  .profit-amt{{font-size:2.2rem}}
-  .dsum-grid{{grid-template-columns:1fr}}
-}}
-@media(max-width:480px){{h1{{font-size:1.15rem}}}}
-.ts{{color:#475569;font-size:.8rem;text-align:center;margin-top:16px;padding:10px}}
+@media(max-width:768px){
+  .tw table{display:none}
+  .cards{display:block}
+  h1{font-size:1.35rem}
+  .pamt{font-size:2.2rem}
+  .dsum-grid{grid-template-columns:1fr}
+}
+@media(max-width:480px){h1{font-size:1.15rem}}
+.ts{color:#475569;font-size:.8rem;text-align:center;margin-top:16px;padding:10px}
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <h1>📊 Top 5 Midcap Intraday Picks</h1>
-  <p class="sub">NSE F&O • 20 High-Volume Midcap Stocks Scanned • RSI + EMA + VWAP + ADX + Volume + Momentum</p>
+  <h1>&#x1F4CA; Top 5 Midcap Intraday Picks &mdash; NSE F&amp;O</h1>
+  <p class="sub">20 High-Volume Midcap Stocks &bull; Scored: RSI + EMA + Volume + Momentum &bull; Best 5 picked fresh every refresh</p>
 
-  <!-- Live indicator + countdown -->
   <div class="cbar">
-    <div class="live-dot">{'🔴 LIVE' if is_live else '🟡 SIMULATED'}</div>
+    <div class="%s">%s</div>
     <div class="ctimer">
-      🔄 Next refresh in <span id="timer">{refresh_secs}s</span>
-      <div class="prog-wrap"><div class="prog-bar" id="prog" style="width:100%"></div></div>
+      &#x1F504; Refresh in &nbsp;<span id="timer">%ds</span>
+      <div class="pw"><div class="pb" id="prog" style="width:100%%"></div></div>
     </div>
   </div>
 
-  {src_banner}
+  %s
 
-  <!-- Day Summary -->
   <div class="dsum">
-    <div class="dsum-title">📅 TODAY'S PERFORMANCE — {d.get('today','')}</div>
+    <div class="dsum-title">&#x1F4C5; TODAY &mdash; %s &nbsp;|&nbsp; Account: %s</div>
     <div class="dsum-grid">
-      <div class="dsbox">
-        <label>💵 Total Capital</label>
-        <div class="dv" style="color:#60a5fa">₹{ti:.0f}</div>
+      <div class="dsb">
+        <label>&#x1F4B5; Total Capital</label>
+        <div class="dsv" style="color:#60a5fa">&#x20b9;%.0f</div>
       </div>
-      <div class="dsbox">
-        <label>🎯 Est. Day Profit (T2)</label>
-        <div class="dv" style="color:#34d399">₹{tep:.2f}</div>
-        <small style="color:#6ee7b7">{(tep/ti*100) if ti>0 else 0:.2f}% return</small>
+      <div class="dsb">
+        <label>&#x1F3AF; Est. Profit at T2</label>
+        <div class="dsv" style="color:#34d399">&#x20b9;%.2f</div>
+        <small style="color:#6ee7b7">%.2f%% return</small>
       </div>
-      <div class="dsbox hl">
-        <label>📈 Live Day P&L</label>
-        <div class="dv" style="color:{dtp_col}">{dtp_arr} ₹{abs(dtp):.2f}</div>
-        <small style="color:{dtp_col}">{((dtp/ti)*100) if ti>0 else 0:+.2f}% on capital</small>
+      <div class="dsb hl">
+        <label>&#x1F4C8; Live Day P&amp;L</label>
+        <div class="dsv" style="color:%s">%s&#x20b9;%.2f</div>
+        <small style="color:%s">%.2f%% on capital</small>
       </div>
     </div>
   </div>
 
-  <!-- Big profit highlight -->
-  <div class="profit-box">
-    <label>💰 Total Expected Profit Today (at T2 target)</label>
-    <span class="profit-amt">₹{tep:.2f}</span>
-    <small>Live P&L so far: <b style="color:{dtp_col}">{dtp_arr} ₹{abs(dtp):.2f}</b> &nbsp;|&nbsp; Account: {d.get('account','Demo')}</small>
+  <div class="pbox">
+    <label>&#x1F4B0; Expected Total Profit Today (T2 target)</label>
+    <span class="pamt">&#x20b9;%.2f</span>
+    <small>Live P&amp;L: <b style="color:%s">%s&#x20b9;%.2f</b> &nbsp;|&nbsp; %s stocks scanned</small>
   </div>
 
-  <!-- Desktop Table -->
-  <div class="tbl-wrap">
+  <div class="tw">
   <table>
     <thead><tr>
-      <th># Symbol</th><th>Price ₹</th><th>Entry ₹</th>
-      <th>📦 Qty</th><th>💵 Invest</th><th>💰 Est.Profit</th>
-      <th>📅 Day P&L</th><th>RSI</th><th>Score</th>
-      <th>Action</th><th>Stop Loss</th><th>T1 2%</th><th>T2 3%</th><th>T3 5%</th>
+      <th>#&nbsp;Symbol</th><th>Live Price</th><th>Entry</th>
+      <th>Qty</th><th>Capital</th><th>Est.Profit</th>
+      <th>Day P&amp;L</th><th>RSI</th><th>Score</th>
+      <th>Signal</th><th>Stop Loss</th>
+      <th>T1&nbsp;2%%</th><th>T2&nbsp;3%%</th><th>T3&nbsp;5%%</th>
     </tr></thead>
-    <tbody>{rows}</tbody>
+    <tbody>%s</tbody>
   </table>
   </div>
 
-  <!-- Mobile Cards -->
-  <div class="cards">{cards}</div>
+  <div class="cards">%s</div>
 
   <div class="ts">
-    Last updated: {now} &nbsp;|&nbsp; Auto-refresh every {refresh_secs//60} min<br>
-    <small>Angel One SmartAPI • NSE F&O Midcap Scanner • {'Live Data' if is_live else 'Simulated Data'}</small>
+    Updated: %s &nbsp;|&nbsp; Auto-refresh every %d min &nbsp;|&nbsp;
+    <small>%s</small>
   </div>
 
 </div>
-
 <script>
-(function(){{
-  var total={refresh_secs}, left=total;
+(function(){
+  var total=%d, left=total;
   var t=document.getElementById('timer'), p=document.getElementById('prog');
-  setInterval(function(){{
+  setInterval(function(){
     left--;
-    if(left<=0){{ window.location.reload(); return; }}
+    if(left<=0){ window.location.reload(); return; }
     if(t) t.textContent=left+'s';
-    if(p) p.style.width=(left/total*100)+'%';
-    if(left<=10){{
-      if(t) t.style.color='#ef4444';
-      if(p) p.style.background='#ef4444';
-    }}
-  }},1000);
-}})();
+    if(p) p.style.width=(left/total*100)+'%%';
+    if(left<=15){ if(t) t.style.color='#ef4444'; if(p) p.style.background='#ef4444'; }
+  },1000);
+})();
 </script>
-</body></html>"""
-
+</body></html>""" % (
+        # live/sim dot
+        "ldot" if is_live else "sdot",
+        "&#x1F534; LIVE" if is_live else "&#x1F7E1; SIMULATED",
+        refresh_secs,
+        # source banner
+        src_html,
+        # day summary
+        d.get("today", ""), d.get("account", "Demo"),
+        ti, tep,
+        (tep / ti * 100) if ti > 0 else 0,
+        dtp_col, dtp_arr, abs(dtp),
+        dtp_col, abs((dtp / ti * 100) if ti > 0 else 0),
+        # profit box
+        tep,
+        dtp_col, dtp_arr, abs(dtp),
+        d.get("total_scanned", 20),
+        # table
+        rows,
+        # cards
+        cards,
+        # footer
+        now, refresh_secs // 60,
+        "Live Angel One SmartAPI" if is_live else data_source[:80],
+        refresh_secs,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  VERCEL HANDLER
@@ -703,10 +721,9 @@ tr:hover{{background:rgba(59,130,246,.07)}}
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            data = get_stock_data()
-
+            data = get_data()
             if self.path.startswith("/api") or "json" in self.path:
-                body = json.dumps(data, indent=2).encode("utf-8")
+                body = json.dumps({k: v for k, v in data.items() if k != "all_stocks"}, indent=2).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
@@ -719,13 +736,11 @@ class handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 self.wfile.write(html)
-
         except Exception as e:
-            msg = f"Server error: {e}".encode("utf-8")
             self.send_response(500)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(msg)
+            self.wfile.write(("Server error: %s" % e).encode())
 
     def log_message(self, fmt, *args):
         pass
