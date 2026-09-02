@@ -22,11 +22,17 @@ try:
 except Exception as e:
     IMPORTS_OK = False; import_errors.append(f"pyotp: {e}")
 try:
+    # SmartApi tries to write logs/ on import — redirect to /tmp (writable on Vercel)
+    import os as _os
+    _os.makedirs("/tmp/smartapi_logs", exist_ok=True)
+    _orig_dir = _os.getcwd()
+    _os.chdir("/tmp")
     from SmartApi import SmartConnect
+    _os.chdir(_orig_dir)
 except Exception as e:
     IMPORTS_OK = False; import_errors.append(f"SmartApi: {e}")
 
-# Log import status on module load
+# Log import status
 print("IMPORT STATUS: OK=%s errors=%s" % (IMPORTS_OK, import_errors))
 
 # ── In-memory cache ────────────────────────────────────────────────────────
@@ -212,8 +218,13 @@ def fetch_live(api_key, client_id, password, totp_secret, now):
     Scores use LTP vs base price for momentum proxy.
     """
     smart = SmartConnect(api_key=api_key)
+    # SmartApi writes session logs to cwd — use /tmp on Vercel
+    import os as _os
+    _orig = _os.getcwd()
+    _os.chdir("/tmp")
     totp  = pyotp.TOTP(totp_secret).now()
     sess  = smart.generateSession(client_id, password, totp)
+    _os.chdir(_orig)
 
     if not isinstance(sess, dict):
         raise RuntimeError("Login non-JSON: %s" % str(sess)[:80])
