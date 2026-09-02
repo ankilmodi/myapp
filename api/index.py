@@ -305,6 +305,11 @@ def get_data():
     totp_secret = os.environ.get("ANGEL_TOTP_SECRET", "")
     has_creds   = all([api_key, client_id, password, totp_secret]) and IMPORTS_OK
 
+    # Debug: log env var presence (not values)
+    print("ENV CHECK: API_KEY=%s CLIENT_ID=%s PASSWORD=%s TOTP=%s IMPORTS=%s" % (
+        bool(api_key), bool(client_id), bool(password), bool(totp_secret), IMPORTS_OK
+    ))
+
     stocks_raw = []
 
     if has_creds:
