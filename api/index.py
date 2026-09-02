@@ -22,17 +22,39 @@ try:
 except Exception as e:
     IMPORTS_OK = False; import_errors.append(f"pyotp: {e}")
 try:
-    # SmartApi tries to write logs/ on import — redirect to /tmp (writable on Vercel)
+    # SmartApi (logzero) tries to create logs/ in the package directory.
+    # On Vercel the filesystem is read-only except /tmp.
+    # Patch: set the logzero log_file to /tmp before SmartApi uses it.
     import os as _os
-    _os.makedirs("/tmp/smartapi_logs", exist_ok=True)
-    _orig_dir = _os.getcwd()
-    _os.chdir("/tmp")
+    import logging as _logging
+
+    # Pre-create /tmp/logs so SmartApi finds it writable
+    _os.makedirs("/tmp/logs", exist_ok=True)
+
+    # Monkey-patch: intercept any attempt to open files under a read-only path
+    _orig_open = open
+    def _safe_open(file, mode='r', *a, **kw):
+        try:
+            f = str(file)
+            if ('logs/' in f or f.endswith('.log')) and ('w' in mode or 'a' in mode):
+                # redirect to /tmp
+                import os.path as _op
+                file = '/tmp/' + _op.basename(f)
+        except Exception:
+            pass
+        return _orig_open(file, mode, *a, **kw)
+
+    import builtins as _builtins
+    _builtins.open = _safe_open
+
     from SmartApi import SmartConnect
-    _os.chdir(_orig_dir)
+
+    # Restore original open
+    _builtins.open = _orig_open
+
 except Exception as e:
     IMPORTS_OK = False; import_errors.append(f"SmartApi: {e}")
 
-# Log import status
 print("IMPORT STATUS: OK=%s errors=%s" % (IMPORTS_OK, import_errors))
 
 # ── In-memory cache ────────────────────────────────────────────────────────
@@ -217,14 +239,24 @@ def fetch_live(api_key, client_id, password, totp_secret, now):
     No history calls → zero rate-limit risk.
     Scores use LTP vs base price for momentum proxy.
     """
-    smart = SmartConnect(api_key=api_key)
-    # SmartApi writes session logs to cwd — use /tmp on Vercel
+    # SmartApi.__init__ calls os.makedirs("logs/...") relative to cwd.
+    # On Vercel the app dir is read-only, so we chdir to /tmp first.
     import os as _os
-    _orig = _os.getcwd()
-    _os.chdir("/tmp")
+    _orig_cwd = _os.getcwd()
+    try:
+        _os.makedirs("/tmp/logs", exist_ok=True)
+        _os.chdir("/tmp")
+    except Exception:
+        pass
+
+    smart = SmartConnect(api_key=api_key)
     totp  = pyotp.TOTP(totp_secret).now()
     sess  = smart.generateSession(client_id, password, totp)
-    _os.chdir(_orig)
+
+    try:
+        _os.chdir(_orig_cwd)
+    except Exception:
+        pass
 
     if not isinstance(sess, dict):
         raise RuntimeError("Login non-JSON: %s" % str(sess)[:80])
