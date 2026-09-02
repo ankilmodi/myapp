@@ -417,144 +417,113 @@ def build_html(d):
     dtp_col      = "#34d399" if dtp >= 0 else "#ef4444"
     dtp_arr      = "+" if dtp >= 0 else "-"
 
+    # ── Source banner (built separately, no CSS %) ─────────────────────────
     if is_live and not from_cache:
-        src_html = '<div class="src-live">&#x2705; LIVE DATA from Angel One SmartAPI &mdash; %d stocks scanned in 1 batch call</div>' % d.get("total_scanned", 0)
+        src_html = '<div class="src-live">&#x2705; LIVE DATA from Angel One SmartAPI &mdash; ' + str(d.get("total_scanned", 0)) + ' stocks scanned</div>'
     elif from_cache:
         mins = cache_age // 60; secs = cache_age % 60
-        src_html = '<div class="src-cache">&#x1F4E6; Cached &mdash; %dm %ds old &nbsp;|&nbsp; Next live fetch in %ds</div>' % (mins, secs, max(0, refresh_secs - cache_age))
+        src_html = '<div class="src-cache">&#x1F4E6; Cached &mdash; ' + str(mins) + 'm ' + str(secs) + 's old &nbsp;|&nbsp; Next live fetch in ' + str(max(0, refresh_secs - cache_age)) + 's</div>'
     else:
-        src_html = '<div class="src-sim">&#x1F504; Simulated Data &mdash; %s &nbsp;|&nbsp; Add Angel One credentials for live rates</div>' % data_source[:60]
+        src_html = '<div class="src-sim">&#x1F504; Simulated Data &mdash; ' + data_source[:60] + ' &nbsp;|&nbsp; Add Angel One credentials for live rates</div>'
 
     # ── Stock rows (desktop table) ─────────────────────────────────────────
     rows = ""
     for idx, s in enumerate(d.get("stocks", []), 1):
-        ac  = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
-        rc  = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
-        dp  = s.get("day_profit", 0)
-        dpp = s.get("day_profit_pct", 0)
-        dpc = "#34d399" if dp >= 0 else "#ef4444"
-        dpa = "+" if dp >= 0 else "-"
-        nb  = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
-        sim = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
-        sc  = s.get("profit_score", 0)
+        ac     = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
+        rc     = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
+        dp     = s.get("day_profit", 0)
+        dpp    = s.get("day_profit_pct", 0)
+        dpc    = "#34d399" if dp >= 0 else "#ef4444"
+        dpa    = "+" if dp >= 0 else "-"
+        nb     = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
+        sim    = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
+        sc     = s.get("profit_score", 0)
         sc_col = "#10b981" if sc >= 75 else "#f59e0b" if sc >= 55 else "#ef4444"
+        nr     = "new-row" if s.get("is_new") else ""
 
-        rows += """<tr class="%s">
-          <td><b style="color:#60a5fa">%d. %s</b>%s%s</td>
-          <td><b>&#x20b9;%.2f</b></td>
-          <td style="color:#10b981"><b>&#x20b9;%.2f</b></td>
-          <td style="color:#fbbf24"><b>%d</b></td>
-          <td style="color:#9ca3af">&#x20b9;%.0f</td>
-          <td style="color:#34d399"><b>&#x20b9;%.2f</b></td>
-          <td style="color:%s"><b>%s&#x20b9;%.2f</b><br><small>(%s%.2f%%)</small></td>
-          <td style="color:%s">%.1f</td>
-          <td><b style="color:%s">%d/100</b></td>
-          <td style="color:%s"><b>%s</b></td>
-          <td style="color:#ef4444">&#x20b9;%.2f</td>
-          <td style="color:#34d399">&#x20b9;%.2f</td>
-          <td style="color:#34d399">&#x20b9;%.2f</td>
-          <td style="color:#34d399">&#x20b9;%.2f</td>
-        </tr>""" % (
-            "new-row" if s.get("is_new") else "",
-            idx, s["symbol"], nb, sim,
-            s["ltp"], s["entry_price"], s["shares_to_buy"],
-            s["investment"], s["expected_profit"],
-            dpc, dpa, abs(dp), dpa, abs(dpp),
-            rc, s["rsi"],
-            sc_col, sc,
-            ac, s["action"],
-            s["stop_loss"], s["target1"], s["target2"], s["target3"]
+        rows += (
+            '<tr class="' + nr + '">'
+            '<td><b style="color:#60a5fa">' + str(idx) + '. ' + s["symbol"] + '</b>' + nb + sim + '</td>'
+            '<td><b>&#x20b9;' + "%.2f" % s["ltp"] + '</b></td>'
+            '<td style="color:#10b981"><b>&#x20b9;' + "%.2f" % s["entry_price"] + '</b></td>'
+            '<td style="color:#fbbf24"><b>' + str(s["shares_to_buy"]) + '</b></td>'
+            '<td style="color:#9ca3af">&#x20b9;' + "%.0f" % s["investment"] + '</td>'
+            '<td style="color:#34d399"><b>&#x20b9;' + "%.2f" % s["expected_profit"] + '</b></td>'
+            '<td style="color:' + dpc + '"><b>' + dpa + '&#x20b9;' + "%.2f" % abs(dp) + '</b><br><small>(' + dpa + "%.2f" % abs(dpp) + '%)</small></td>'
+            '<td style="color:' + rc + '">' + "%.1f" % s["rsi"] + '</td>'
+            '<td><b style="color:' + sc_col + '">' + str(sc) + '/100</b></td>'
+            '<td style="color:' + ac + '"><b>' + s["action"] + '</b></td>'
+            '<td style="color:#ef4444">&#x20b9;' + "%.2f" % s["stop_loss"] + '</td>'
+            '<td style="color:#34d399">&#x20b9;' + "%.2f" % s["target1"] + '</td>'
+            '<td style="color:#34d399">&#x20b9;' + "%.2f" % s["target2"] + '</td>'
+            '<td style="color:#34d399">&#x20b9;' + "%.2f" % s["target3"] + '</td>'
+            '</tr>'
         )
 
-    # ── Mobile cards ──────────────────────────────────────────────────────
+    # ── Mobile cards ───────────────────────────────────────────────────────
     cards = ""
     for idx, s in enumerate(d.get("stocks", []), 1):
-        ac  = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
-        rc  = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
-        dp  = s.get("day_profit", 0)
-        dpp = s.get("day_profit_pct", 0)
-        dpc = "#34d399" if dp >= 0 else "#ef4444"
-        dpa = "+" if dp >= 0 else "-"
-        sc  = s.get("profit_score", 0)
+        ac     = "#34d399" if "BUY" in s["action"] else "#fbbf24" if "HOLD" in s["action"] else "#ef4444"
+        rc     = "#34d399" if 45 <= s["rsi"] <= 72 else "#fbbf24" if s["rsi"] > 72 else "#ef4444"
+        dp     = s.get("day_profit", 0)
+        dpp    = s.get("day_profit_pct", 0)
+        dpc    = "#34d399" if dp >= 0 else "#ef4444"
+        dpa    = "+" if dp >= 0 else "-"
+        sc     = s.get("profit_score", 0)
         sc_col = "#10b981" if sc >= 75 else "#f59e0b" if sc >= 55 else "#ef4444"
-        nb  = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
-        sim = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
-        fe  = s.get("first_entry", s["entry_price"])
+        nb     = '<span class="nbadge">NEW</span>' if s.get("is_new") else ""
+        sim    = '<span class="sbadge">~sim</span>' if s.get("is_simulated") else ""
+        fe     = s.get("first_entry", s["entry_price"])
+        nc     = "new-card" if s.get("is_new") else ""
+        dp_bg  = "rgba(52,211,153,.07)" if dp >= 0 else "rgba(239,68,68,.07)"
 
-        cards += """
-        <div class="card %s">
-          <div class="ctop">
-            <span class="csym">%d. %s %s%s</span>
-            <span class="cbadge" style="background:%s">%s</span>
-          </div>
-
-          <div class="dprow" style="border-color:%s;background:%s">
-            <div class="dplbl">&#x1F4C5; TODAY P&amp;L</div>
-            <div class="dpval" style="color:%s">%s &#x20b9;%.2f &nbsp;<small>(%.2f%%)</small></div>
-            <div class="dpfrom">Since entry &#x20b9;%.2f &bull; %d sessions</div>
-          </div>
-
-          <div class="r3">
-            <div class="bx"><div class="bl">Score</div><div class="bv" style="color:%s;font-size:1.4rem">%d/100</div></div>
-            <div class="bx"><div class="bl">RSI</div><div class="bv" style="color:%s">%.1f</div></div>
-            <div class="bx"><div class="bl">RVOL</div><div class="bv" style="color:#fbbf24">%.2fx</div></div>
-          </div>
-
-          <div class="r2">
-            <div class="px"><div class="bl">Live Price</div><div class="pv">&#x20b9;%.2f</div></div>
-            <div class="px hl"><div class="bl">Entry Price</div><div class="pv">&#x20b9;%.2f</div></div>
-          </div>
-
-          <div class="r3">
-            <div class="bx"><div class="bl">Qty</div><div class="bv yellow">%d</div></div>
-            <div class="bx"><div class="bl">Capital</div><div class="bv blue">&#x20b9;%.0f</div></div>
-            <div class="bx hl2"><div class="bl">Est. Profit</div><div class="bv green">&#x20b9;%.2f</div></div>
-          </div>
-
-          <div class="tr3">
-            <div class="tb"><div class="tl">T1 &nbsp;2%%</div><div class="tv">&#x20b9;%.2f</div></div>
-            <div class="tb"><div class="tl">T2 &nbsp;3%%</div><div class="tv">&#x20b9;%.2f</div></div>
-            <div class="tb"><div class="tl">T3 &nbsp;5%%</div><div class="tv">&#x20b9;%.2f</div></div>
-          </div>
-
-          <div class="slr">&#x1F6D1; Stop Loss <b style="color:#ef4444">&#x20b9;%.2f</b>
-            &nbsp;|&nbsp; <span style="color:#fbbf24">%s</span></div>
-        </div>""" % (
-            "new-card" if s.get("is_new") else "",
-            idx, s["symbol"], nb, sim,
-            ac, s["action"],
-            dpc, "rgba(52,211,153,.07)" if dp >= 0 else "rgba(239,68,68,.07)",
-            dpc, dpa, abs(dp), abs(dpp),
-            fe, s.get("sessions_today", 0),
-            sc_col, sc,
-            rc, s["rsi"],
-            s.get("rvol", 1.0),
-            s["ltp"], s["entry_price"],
-            s["shares_to_buy"], s["investment"], s["expected_profit"],
-            s["target1"], s["target2"], s["target3"],
-            s["stop_loss"], s.get("buy_label", "")
+        cards += (
+            '<div class="card ' + nc + '">'
+            '<div class="ctop">'
+            '<span class="csym">' + str(idx) + '. ' + s["symbol"] + ' ' + nb + sim + '</span>'
+            '<span class="cbadge" style="background:' + ac + '">' + s["action"] + '</span>'
+            '</div>'
+            '<div class="dprow" style="border-color:' + dpc + ';background:' + dp_bg + '">'
+            '<div class="dplbl">&#x1F4C5; TODAY P&amp;L</div>'
+            '<div class="dpval" style="color:' + dpc + '">' + dpa + ' &#x20b9;' + "%.2f" % abs(dp) + ' <small>(' + "%.2f" % abs(dpp) + '%)</small></div>'
+            '<div class="dpfrom">Since &#x20b9;' + "%.2f" % fe + ' &bull; ' + str(s.get("sessions_today", 0)) + ' sessions</div>'
+            '</div>'
+            '<div class="r3">'
+            '<div class="bx"><div class="bl">Score</div><div class="bv" style="color:' + sc_col + ';font-size:1.4rem">' + str(sc) + '/100</div></div>'
+            '<div class="bx"><div class="bl">RSI</div><div class="bv" style="color:' + rc + '">' + "%.1f" % s["rsi"] + '</div></div>'
+            '<div class="bx"><div class="bl">RVOL</div><div class="bv" style="color:#fbbf24">' + "%.2f" % s.get("rvol", 1.0) + 'x</div></div>'
+            '</div>'
+            '<div class="r2">'
+            '<div class="px"><div class="bl">Live Price</div><div class="pv">&#x20b9;' + "%.2f" % s["ltp"] + '</div></div>'
+            '<div class="px hl"><div class="bl">Entry Price</div><div class="pv">&#x20b9;' + "%.2f" % s["entry_price"] + '</div></div>'
+            '</div>'
+            '<div class="r3">'
+            '<div class="bx"><div class="bl">Qty</div><div class="bv yellow">' + str(s["shares_to_buy"]) + '</div></div>'
+            '<div class="bx"><div class="bl">Capital</div><div class="bv blue">&#x20b9;' + "%.0f" % s["investment"] + '</div></div>'
+            '<div class="bx hl2"><div class="bl">Est. Profit</div><div class="bv green">&#x20b9;' + "%.2f" % s["expected_profit"] + '</div></div>'
+            '</div>'
+            '<div class="tr3">'
+            '<div class="tb"><div class="tl">T1 2%</div><div class="tv">&#x20b9;' + "%.2f" % s["target1"] + '</div></div>'
+            '<div class="tb"><div class="tl">T2 3%</div><div class="tv">&#x20b9;' + "%.2f" % s["target2"] + '</div></div>'
+            '<div class="tb"><div class="tl">T3 5%</div><div class="tv">&#x20b9;' + "%.2f" % s["target3"] + '</div></div>'
+            '</div>'
+            '<div class="slr">&#x1F6D1; Stop Loss <b style="color:#ef4444">&#x20b9;' + "%.2f" % s["stop_loss"] + '</b>'
+            ' &nbsp;|&nbsp; <span style="color:#fbbf24">' + s.get("buy_label", "") + '</span></div>'
+            '</div>'
         )
 
-    return """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Top 5 Midcap Intraday &mdash; NSE F&amp;O Live Scanner</title>
-<style>
+    # ── Static CSS (kept separate so no % chars touch the format engine) ──
+    CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:linear-gradient(135deg,#0a0f1e,#111827);color:#e5e7eb;
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:10px;min-height:100vh}
 .wrap{max-width:1500px;margin:0 auto}
-h1{font-size:1.7rem;font-weight:800;
-   background:linear-gradient(135deg,#3b82f6,#10b981);
+h1{font-size:1.7rem;font-weight:800;background:linear-gradient(135deg,#3b82f6,#10b981);
    -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
 .sub{color:#9ca3af;font-size:.85rem;margin-bottom:12px}
-
 .src-live{background:rgba(16,185,129,.15);border-left:4px solid #10b981;padding:10px 14px;border-radius:8px;color:#34d399;font-size:.88rem;margin:10px 0}
 .src-cache{background:rgba(6,182,212,.12);border-left:4px solid #06b6d4;padding:10px 14px;border-radius:8px;color:#67e8f9;font-size:.88rem;margin:10px 0}
 .src-sim{background:rgba(245,158,11,.12);border-left:4px solid #f59e0b;padding:10px 14px;border-radius:8px;color:#fbbf24;font-size:.88rem;margin:10px 0}
-
 .cbar{display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap}
 .ldot{background:#059669;color:#fff;padding:5px 14px;border-radius:20px;font-weight:700;font-size:.82rem;animation:pulse 2s infinite}
 .sdot{background:#d97706;color:#fff;padding:5px 14px;border-radius:20px;font-weight:700;font-size:.82rem}
@@ -564,15 +533,11 @@ h1{font-size:1.7rem;font-weight:800;
 #timer{color:#fbbf24;font-weight:800;font-size:1rem;font-variant-numeric:tabular-nums}
 .pw{width:130px;height:5px;background:#334155;border-radius:3px;overflow:hidden}
 .pb{height:100%;background:linear-gradient(90deg,#3b82f6,#10b981);border-radius:3px;transition:width 1s linear}
-
 .nbadge{background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:.58rem;
-        font-weight:800;padding:2px 5px;border-radius:4px;margin-left:4px;vertical-align:middle;
-        animation:flash 1s 4}
+        font-weight:800;padding:2px 5px;border-radius:4px;margin-left:4px;vertical-align:middle;animation:flash 1s 4}
 .sbadge{background:#334155;color:#94a3b8;font-size:.58rem;padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle}
 @keyframes flash{0%,100%{opacity:1}50%{opacity:.2}}
 .new-row{background:rgba(245,158,11,.05)!important}
-
-/* Day summary */
 .dsum{background:#0f172a;border:2px solid #1e40af;border-radius:14px;padding:16px;margin:14px 0}
 .dsum-title{color:#93c5fd;font-weight:700;font-size:.9rem;margin-bottom:12px}
 .dsum-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
@@ -581,8 +546,6 @@ h1{font-size:1.7rem;font-weight:800;
 .dsb label{display:block;color:#9ca3af;font-size:.72rem;margin-bottom:6px}
 .dsv{font-size:1.5rem;font-weight:800}
 .dsb small{font-size:.72rem;margin-top:4px;display:block}
-
-/* Big profit */
 .pbox{background:linear-gradient(135deg,#065f46,#047857);border:3px solid #10b981;
       border-radius:14px;padding:20px;margin:14px 0;text-align:center;
       box-shadow:0 8px 40px rgba(16,185,129,.3);animation:glow 2.5s infinite}
@@ -591,8 +554,6 @@ h1{font-size:1.7rem;font-weight:800;
             margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
 .pamt{display:block;color:#fff;font-size:3rem;font-weight:900;text-shadow:0 4px 12px rgba(0,0,0,.3);margin:8px 0}
 .pbox small{color:#a7f3d0;font-size:.88rem}
-
-/* Table */
 .tw{overflow-x:auto;margin:14px 0}
 table{width:100%;background:rgba(17,24,39,.95);border-radius:12px;
       border-collapse:collapse;min-width:1100px;box-shadow:0 8px 40px rgba(0,0,0,.4)}
@@ -600,11 +561,8 @@ thead{background:linear-gradient(135deg,#1e293b,#334155)}
 th,td{padding:10px 7px;text-align:center;border-bottom:1px solid rgba(71,85,105,.22);font-size:.75rem}
 th{color:#60a5fa;font-weight:700;text-transform:uppercase;font-size:.63rem;letter-spacing:.04em}
 tr:hover{background:rgba(59,130,246,.07)}
-
-/* Cards */
 .cards{display:none}
-.card{background:rgba(17,24,39,.95);border-radius:16px;padding:14px;
-      margin-bottom:14px;border:1px solid rgba(59,130,246,.2)}
+.card{background:rgba(17,24,39,.95);border-radius:16px;padding:14px;margin-bottom:14px;border:1px solid rgba(59,130,246,.2)}
 .new-card{border:2px solid #f59e0b!important}
 .ctop{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .csym{color:#60a5fa;font-size:1.25rem;font-weight:800}
@@ -627,120 +585,83 @@ tr:hover{background:rgba(59,130,246,.07)}
 .tl{color:#10b981;font-size:.62rem;margin-bottom:2px}
 .tv{color:#34d399;font-size:.88rem;font-weight:700}
 .slr{background:#1e293b;padding:8px;border-radius:7px;font-size:.78rem;color:#9ca3af;text-align:center}
-
-@media(max-width:768px){
-  .tw table{display:none}
-  .cards{display:block}
-  h1{font-size:1.35rem}
-  .pamt{font-size:2.2rem}
-  .dsum-grid{grid-template-columns:1fr}
-}
+@media(max-width:768px){.tw table{display:none}.cards{display:block}h1{font-size:1.35rem}.pamt{font-size:2.2rem}.dsum-grid{grid-template-columns:1fr}}
 @media(max-width:480px){h1{font-size:1.15rem}}
 .ts{color:#475569;font-size:.8rem;text-align:center;margin-top:16px;padding:10px}
-</style>
-</head>
-<body>
-<div class="wrap">
+"""
 
-  <h1>&#x1F4CA; Top 5 Midcap Intraday Picks &mdash; NSE F&amp;O</h1>
-  <p class="sub">20 High-Volume Midcap Stocks &bull; Scored: RSI + EMA + Volume + Momentum &bull; Best 5 picked fresh every refresh</p>
-
-  <div class="cbar">
-    <div class="%s">%s</div>
-    <div class="ctimer">
-      &#x1F504; Refresh in &nbsp;<span id="timer">%ds</span>
-      <div class="pw"><div class="pb" id="prog" style="width:100%%"></div></div>
-    </div>
-  </div>
-
-  %s
-
-  <div class="dsum">
-    <div class="dsum-title">&#x1F4C5; TODAY &mdash; %s &nbsp;|&nbsp; Account: %s</div>
-    <div class="dsum-grid">
-      <div class="dsb">
-        <label>&#x1F4B5; Total Capital</label>
-        <div class="dsv" style="color:#60a5fa">&#x20b9;%.0f</div>
-      </div>
-      <div class="dsb">
-        <label>&#x1F3AF; Est. Profit at T2</label>
-        <div class="dsv" style="color:#34d399">&#x20b9;%.2f</div>
-        <small style="color:#6ee7b7">%.2f%% return</small>
-      </div>
-      <div class="dsb hl">
-        <label>&#x1F4C8; Live Day P&amp;L</label>
-        <div class="dsv" style="color:%s">%s&#x20b9;%.2f</div>
-        <small style="color:%s">%.2f%% on capital</small>
-      </div>
-    </div>
-  </div>
-
-  <div class="pbox">
-    <label>&#x1F4B0; Expected Total Profit Today (T2 target)</label>
-    <span class="pamt">&#x20b9;%.2f</span>
-    <small>Live P&amp;L: <b style="color:%s">%s&#x20b9;%.2f</b> &nbsp;|&nbsp; %s stocks scanned</small>
-  </div>
-
-  <div class="tw">
-  <table>
-    <thead><tr>
-      <th>#&nbsp;Symbol</th><th>Live Price</th><th>Entry</th>
-      <th>Qty</th><th>Capital</th><th>Est.Profit</th>
-      <th>Day P&amp;L</th><th>RSI</th><th>Score</th>
-      <th>Signal</th><th>Stop Loss</th>
-      <th>T1&nbsp;2%%</th><th>T2&nbsp;3%%</th><th>T3&nbsp;5%%</th>
-    </tr></thead>
-    <tbody>%s</tbody>
-  </table>
-  </div>
-
-  <div class="cards">%s</div>
-
-  <div class="ts">
-    Updated: %s &nbsp;|&nbsp; Auto-refresh every %d min &nbsp;|&nbsp;
-    <small>%s</small>
-  </div>
-
-</div>
-<script>
-(function(){
-  var total=%d, left=total;
-  var t=document.getElementById('timer'), p=document.getElementById('prog');
-  setInterval(function(){
-    left--;
-    if(left<=0){ window.location.reload(); return; }
-    if(t) t.textContent=left+'s';
-    if(p) p.style.width=(left/total*100)+'%%';
-    if(left<=15){ if(t) t.style.color='#ef4444'; if(p) p.style.background='#ef4444'; }
-  },1000);
-})();
-</script>
-</body></html>""" % (
-        # live/sim dot
-        "ldot" if is_live else "sdot",
-        "&#x1F534; LIVE" if is_live else "&#x1F7E1; SIMULATED",
-        refresh_secs,
-        # source banner
-        src_html,
-        # day summary
-        d.get("today", ""), d.get("account", "Demo"),
-        ti, tep,
-        (tep / ti * 100) if ti > 0 else 0,
-        dtp_col, dtp_arr, abs(dtp),
-        dtp_col, abs((dtp / ti * 100) if ti > 0 else 0),
-        # profit box
-        tep,
-        dtp_col, dtp_arr, abs(dtp),
-        d.get("total_scanned", 20),
-        # table
-        rows,
-        # cards
-        cards,
-        # footer
-        now, refresh_secs // 60,
-        "Live Angel One SmartAPI" if is_live else data_source[:80],
-        refresh_secs,
+    # ── JS timer (built as plain string, no % format) ─────────────────────
+    JS = (
+        "(function(){"
+        "var total=" + str(refresh_secs) + ",left=total;"
+        "var t=document.getElementById('timer'),p=document.getElementById('prog');"
+        "setInterval(function(){"
+        "left--;"
+        "if(left<=0){window.location.reload();return;}"
+        "if(t)t.textContent=left+'s';"
+        "if(p)p.style.width=(left/total*100)+'%';"
+        "if(left<=15){if(t)t.style.color='#ef4444';if(p)p.style.background='#ef4444';}"
+        "},1000);"
+        "})();"
     )
+
+    # ── Assemble final HTML using string concatenation (no % on full page) ─
+    live_cls  = "ldot" if is_live else "sdot"
+    live_lbl  = "&#x1F534; LIVE" if is_live else "&#x1F7E1; SIMULATED"
+    ret_pct   = "%.2f" % ((tep / ti * 100) if ti > 0 else 0)
+    cap_pct   = "%.2f" % (abs((dtp / ti * 100) if ti > 0 else 0))
+    footer_src = "Live Angel One SmartAPI" if is_live else data_source[:80]
+
+    html = (
+        '<!DOCTYPE html><html lang="en"><head>'
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Top 5 Midcap Intraday &mdash; NSE F&amp;O Live Scanner</title>'
+        '<style>' + CSS + '</style>'
+        '</head><body><div class="wrap">'
+        '<h1>&#x1F4CA; Top 5 Midcap Intraday Picks &mdash; NSE F&amp;O</h1>'
+        '<p class="sub">20 High-Volume Midcap Stocks &bull; RSI + EMA + Volume + Momentum &bull; Best 5 picked every refresh</p>'
+        '<div class="cbar">'
+        '<div class="' + live_cls + '">' + live_lbl + '</div>'
+        '<div class="ctimer">&#x1F504; Refresh in &nbsp;<span id="timer">' + str(refresh_secs) + 's</span>'
+        '<div class="pw"><div class="pb" id="prog" style="width:100%"></div></div>'
+        '</div></div>'
+        + src_html +
+        '<div class="dsum">'
+        '<div class="dsum-title">&#x1F4C5; TODAY &mdash; ' + d.get("today", "") + ' &nbsp;|&nbsp; Account: ' + d.get("account", "Demo") + '</div>'
+        '<div class="dsum-grid">'
+        '<div class="dsb"><label>&#x1F4B5; Total Capital</label>'
+        '<div class="dsv" style="color:#60a5fa">&#x20b9;' + "%.0f" % ti + '</div></div>'
+        '<div class="dsb"><label>&#x1F3AF; Est. Profit at T2</label>'
+        '<div class="dsv" style="color:#34d399">&#x20b9;' + "%.2f" % tep + '</div>'
+        '<small style="color:#6ee7b7">' + ret_pct + '% return</small></div>'
+        '<div class="dsb hl"><label>&#x1F4C8; Live Day P&amp;L</label>'
+        '<div class="dsv" style="color:' + dtp_col + '">' + dtp_arr + '&#x20b9;' + "%.2f" % abs(dtp) + '</div>'
+        '<small style="color:' + dtp_col + '">' + cap_pct + '% on capital</small></div>'
+        '</div></div>'
+        '<div class="pbox">'
+        '<label>&#x1F4B0; Expected Total Profit Today (T2 target)</label>'
+        '<span class="pamt">&#x20b9;' + "%.2f" % tep + '</span>'
+        '<small>Live P&amp;L: <b style="color:' + dtp_col + '">' + dtp_arr + '&#x20b9;' + "%.2f" % abs(dtp) + '</b>'
+        ' &nbsp;|&nbsp; ' + str(d.get("total_scanned", 20)) + ' stocks scanned</small>'
+        '</div>'
+        '<div class="tw"><table>'
+        '<thead><tr>'
+        '<th># Symbol</th><th>Live Price</th><th>Entry</th>'
+        '<th>Qty</th><th>Capital</th><th>Est.Profit</th>'
+        '<th>Day P&amp;L</th><th>RSI</th><th>Score</th>'
+        '<th>Signal</th><th>Stop Loss</th>'
+        '<th>T1 2%</th><th>T2 3%</th><th>T3 5%</th>'
+        '</tr></thead>'
+        '<tbody>' + rows + '</tbody>'
+        '</table></div>'
+        '<div class="cards">' + cards + '</div>'
+        '<div class="ts">Updated: ' + now + ' &nbsp;|&nbsp; Auto-refresh every ' + str(refresh_secs // 60) + ' min'
+        ' &nbsp;|&nbsp; <small>' + footer_src + '</small></div>'
+        '</div>'
+        '<script>' + JS + '</script>'
+        '</body></html>'
+    )
+    return html
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  VERCEL HANDLER
